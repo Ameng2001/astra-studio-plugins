@@ -33,6 +33,8 @@ clife-onto-engine 是运行时内核，`studio-ontology` 是夹在中间、把 D
 
 **Intake 标准 spec** 是给 FDE / 业务方 / 领域专家 / 规则工程师的**标准输入契约**：11 段（业务概述·角色·对象·关系·动作·指标·**规则**·决策点·数据源·能力问题·治理），每段标注谁来填、编译成哪个本体要素，带草业示例 + 完成度自检。填完即可喂给 `ontology-map`。两入口的 →IR 映射见 `skills/ontology-map/SKILL.md`。
 
+填好样例（参照运行时的真实插件）：[`examples/domain-intake-chili.md`](examples/domain-intake-chili.md) —— 一份填满的辣椒 intake，对照 clife-onto-engine 的 `plugins/chili`，展示"同一份模板、换个领域、填出来结构一致"。
+
 ## 用法
 
 ```bash
