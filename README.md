@@ -14,6 +14,10 @@ Astra Studio handles the **outer loop** of plugin development — business analy
 | **studio-quality** | 2 | Quality assurance — plugin validation, MCP wiring | `claude plugin install studio-quality@astra-studio` |
 | **studio-docs** | 6 | Document delivery — blueprints, writing experts, parallel generation, export | `claude plugin install studio-docs@astra-studio` |
 | **studio-platform** | 6 | Platform docs — brainmap, agent mapping, tech designs, visualization, speech | `claude plugin install studio-platform@astra-studio` |
+| **studio-design** | 4 | Design-to-code — screenshot → Pencil prototype → OpenSpec proposal → working code | `claude plugin install studio-design@astra-studio` |
+| **studio-ontology** | 3 | **FDE pipeline** — compile business analysis (DDD/event-storm, or a domain-intake spec) into a runnable [clife-onto-engine](https://github.com/Ameng2001/clife-onto-engine) ontology plugin (five-element schema: Object/Link/Function/Rule/Action) | `claude plugin install studio-ontology@astra-studio` |
+
+> **studio-ontology** bridges astra-studio (modeling) to **[clife-onto-engine](https://github.com/Ameng2001/clife-onto-engine)** (OAG runtime). It is the Palantir-style **Foundry → FDE → Ontology** modeling front-end: business analysis → five-element ontology IR → a runnable governed-action plugin. Validated end-to-end on real material (output isomorphic to the hand-built `plugins/grass`).
 
 ## Quick Start
 

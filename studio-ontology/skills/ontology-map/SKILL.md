@@ -11,16 +11,30 @@ user-invocable: true
 
 完整字段规范、上游映射规则、完整性自检 → **必读 `${CLAUDE_SKILL_DIR}/../../references/ontology-map-schema.md`**。
 
-## Pre-check
+## Pre-check — 两种输入入口（二选一）
 
-1. 确认 `studio/` 存在。
-2. 读取上游分析产物（有则用，缺则用专家现场补）：
-   - `studio/changes/{domain}/behavior-matrix.md` —— **首要来源**（Data Entity Map→Object，Action→Action，Data Out→Function）
-   - `studio/changes/{domain}/domain-canvas.md` —— Owns→Object、Relationship Map→Link、core/supporting/generic 分层
-   - `studio/changes/{domain}/processes/*.md` —— Decision Point 条件→Rule、状态流转→lifecycle
-   - `studio/changes/{domain}/event-storm.md` —— Events→Action/事件、Hotspots→Rule、Decision Points
-   - 若全缺：要求用户先跑 `/studio-planner:plan`，或仅凭一句业务描述启动（退化为现场建模）。
-3. 确定 `ontology_id`（= 限界上下文 / domain-model 的插件候选名）与 `target_dir`（clife-onto-engine 仓库内落点，如 `plugins/{ontology_id}`）。
+**入口 A：studio-planner 分析产物**（已跑过 `/studio-planner:plan`）
+- `studio/changes/{domain}/behavior-matrix.md` —— **首要来源**（Data Entity Map→Object，Action→Action，Data Out→Function）
+- `studio/changes/{domain}/domain-canvas.md` —— Owns→Object、Relationship Map→Link、core/supporting/generic 分层
+- `studio/changes/{domain}/processes/*.md` —— Decision Point 条件→Rule、状态流转→lifecycle
+- `studio/changes/{domain}/event-storm.md` —— Events→Action/事件、Hotspots→Rule
+
+**入口 B：领域 Intake 标准 spec**（无 studio-planner 产物时——FDE 直接拿模板访谈/交业务方填）
+- 模板：`${CLAUDE_SKILL_DIR}/../../templates/domain-intake.md.tmpl`（拷给业务方/领域专家填，存为 `studio/changes/{ontology_id}/domain-intake.md`）。
+- **Intake → IR 对照**（直接按段映射）：
+  | Intake 段 | → IR 段 |
+  |---|---|
+  | §3 业务对象 | §1 Objects（主键/属性/lifecycle/source 直接对应） |
+  | §4 关系（含因果性质） | §2 Links（因果性质→edge_semantics：根因/假设/派生） |
+  | §6 派生指标 | §3 Functions（reads/returns/口径） |
+  | §7 业务规则 + §8 决策点 | §4 Rules（拦/告警→severity，只看入参/要查→backing，依据→source/citations） |
+  | §5 业务动作 + §2 角色 + §11 治理 | §5 Actions（params/guards/post_rules/writes，HIL 来自 §5/§11） |
+  | §9 数据来源 | §6 Mapping |
+  | §10 能力问题 | §7 CQ |
+
+若两入口都没有：仅凭一句业务描述启动（退化为现场建模，靠专家 agent 补；强烈建议先填 Intake）。
+
+最后：确定 `ontology_id`（= 限界上下文 / domain-model 插件候选名）与 `target_dir`（clife-onto-engine 仓库内落点，如 `plugins/{ontology_id}`）。
 
 ## Workflow
 
