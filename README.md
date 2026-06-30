@@ -180,7 +180,59 @@ Both studio-insight and studio-planner use multiple perspectives via subagent ro
 
 Custom experts are saved to `studio/agents/` (git-tracked, team-shared) and automatically discovered by all insight skills at runtime. Project-level experts override built-ins with the same filename.
 
+## studio-ontology: Ontology Compilation (FDE Pipeline)
+
+Compile business analysis into a **runnable digital-intelligent ontology** — a [clife-onto-engine](https://github.com/Ameng2001/clife-onto-engine) plugin with the five-element schema (**Object / Link / Function / Rule / Action**). This is the Palantir-style **Foundry → FDE → Ontology** modeling front-end: astra-studio models the business; clife-onto-engine runs it as a governed OAG (do/query, ontology backstop, audit, rollback).
+
+### Two input entries
+
+| Entry | When | Source |
+|-------|------|--------|
+| **A. studio-planner artifacts** | already ran the planning pipeline | behavior-matrix / domain-canvas / process-flow / event-storm |
+| **B. Domain Intake spec** | no planner run — FDE intakes the domain directly | `studio-ontology/templates/domain-intake.md.tmpl` |
+
+### Domain Intake — the standard input spec
+
+`domain-intake.md.tmpl` is the **standard input contract** an FDE hands to the business owner / domain expert / rule engineer. **11 role-annotated sections**, each mapping to a five-element target — so a filled intake compiles straight into an ontology:
+
+| Intake section | Filled by | → Ontology element |
+|----------------|-----------|--------------------|
+| §3 Entities | domain expert / FDE | **Object** |
+| §4 Relationships (with causal nature) | domain expert / FDE | **Link** (root_cause / hypothesis / derivation) |
+| §6 Metrics / KPIs | domain expert | **Function** (read-only derived) |
+| §7 Rules + §8 Decision points | domain expert + rule engineer | **Rule** (severity · declarative/function · source+citations) |
+| §5 Operations + §2 Actors + §11 Governance | business owner + FDE | **Action** (params / guards / post-rules / writes / HIL) |
+| §9 Data sources | data/IT | Mapping registry |
+| §10 Competency Questions | business owner + FDE | CQ (acceptance) |
+
+It lets you start **without** the full event-storm: hand the template to the business, collect it, feed it to `ontology-map`. Worked examples: **grass** (inline in the template) + **[chili](studio-ontology/examples/domain-intake-chili.md)** — same template, different domain, consistent five-element output.
+
+### Pipeline (3 skills)
+
+```
+business analysis (planner artifacts) ─┐
+or a filled domain-intake.md          ─┴→ ontology-map   (five-element IR)
+                                              ↓ user reviews IR (rule classification + provenance)
+                                          ontology-compile → clife-onto-engine plugin
+                                              declarative rules auto-generated;
+                                              function-backed rules / action write-back = skeletons w/ TODO(FDE)
+                                              ↓ FDE fills the skeletons in the engine repo
+                                          ontology-validate  (structure · governance audit · behavioral CQ)
+```
+
+```bash
+/studio-ontology:model {ontology_id}     # map → review → compile
+# or step by step:
+/studio-ontology:map {ontology_id}
+/studio-ontology:compile {ontology_id}
+/studio-ontology:validate {ontology_id}
+```
+
+Validated end-to-end on real material: the compiled grass plugin is **structurally isomorphic** to the hand-built `plugins/grass` in clife-onto-engine (7 objects, 3 links, 1 function, 6 rules, 2 actions).
+
 ## Full Workflow
+
+Two outputs share the same upstream analysis: a **Claude Code plugin** (via studio-planner → spec-generate) or a **runnable ontology** (via studio-ontology → clife-onto-engine).
 
 ```
 /studio-core:init                       /studio-planner:plan
@@ -197,29 +249,29 @@ Custom experts are saved to `studio/agents/` (git-tracked, team-shared) and auto
                                           ├── behavior-matrix   → behavior-matrix.md  ├ full mode only
                                           └── opportunity-brief → opportunity-brief.md┘
                                                 ↓
-                                        skill-design
-                                          ├── trait detection   → skill-map.md
-                                          └── skill breakdown   → skill-map.md
-                                                ↓
-                                        spec-generate + trait scaffolding
-                                                ↓
-                                studio/changes/{plugin}/    {target_dir}/
-                                ├── brief.md                skills/{skill}/SKILL.md
-                                └── plugin.json.draft       commands/{skill}.md
-                                                            commands/{pipeline}.md  (multi-pipeline)
-                                                            skills/init-workspace/  (stateful)
-                                                            agents/                 (expert-scoped)
-                                                ↓
-                              build-skills (initial drafts)
-                                                ↓
-                              test + iterate with skill-creator
-                                                ↓
-                              /studio-quality:validate
-                                                ↓
-                              /studio-core:promote (versioned: v0.1 → v0.2)
-                                                ↓
-      studio/archive/{plugin}/{date}-iteration-{N}/   {target_dir}/.claude-plugin/
-      (snapshot — originals stay in changes/)          plugin.json (version bumped)
+                          ┌─────────────────────┴──────────────────────┐
+                          │ TARGET = Claude Code plugin                  │ TARGET = runnable ontology
+                          ▼                                              ▼
+                  skill-design                                   /studio-ontology:model
+                    ├── trait detection   → skill-map.md           (or a filled domain-intake.md
+                    └── skill breakdown   → skill-map.md            instead of planner artifacts)
+                          ↓                                              ↓
+                  spec-generate + trait scaffolding              ontology-map → ontology-map.md (5-element IR)
+                          ↓                                              ↓ user reviews IR
+          studio/changes/{plugin}/   {target_dir}/               ontology-compile
+          ├── brief.md               skills/{skill}/SKILL.md        → {target_dir}/__init__.py + mappings + cq + plugin.yaml
+          └── plugin.json.draft      commands/{skill}.md            (declarative auto; function-backed / write-back = TODO(FDE))
+                          ↓                                              ↓ FDE fills skeletons in engine repo
+          build-skills (initial drafts)                          ontology-validate (structure · governance · CQ)
+                          ↓                                              ↓
+          test + iterate with skill-creator                      clife-onto-engine plugins/{ontology_id}/
+                          ↓                                       runs as governed OAG (do/query · audit · rollback)
+          /studio-quality:validate
+                          ↓
+          /studio-core:promote (versioned: v0.1 → v0.2)
+                          ↓
+  studio/archive/{plugin}/{date}-iteration-{N}/   {target_dir}/.claude-plugin/
+  (snapshot — originals stay in changes/)          plugin.json (version bumped)
 ```
 
 ## Architecture
