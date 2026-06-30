@@ -232,46 +232,33 @@ Validated end-to-end on real material: the compiled grass plugin is **structural
 
 ## Full Workflow
 
-Two outputs share the same upstream analysis: a **Claude Code plugin** (via studio-planner → spec-generate) or a **runnable ontology** (via studio-ontology → clife-onto-engine).
+One upstream analysis feeds **two layers** of the same system — they are **not** mutually exclusive. studio-ontology produces the **governed substrate** (the ontology / OAG runtime); studio-planner produces the **interaction layer** (skills / agents). At runtime the skills **call** the ontology — skills are the caller, the ontology is the callee.
 
 ```
-/studio-core:init                       /studio-planner:plan
-        ↓                                       ↓
-    studio/                             event-storm
-    ├── config.yaml                       ├── persona-insight   → personas/
-    ├── changes/                          ├── journey-map       → journeys/
-    └── archive/                          ├── process-flow      → processes/
-                                          ├── KB dependencies   → event-storm.md
-                                          └── expert scope      → event-storm.md
-                                                ↓
-                                        domain-model (full / fast mode)
-                                          ├── domain-canvas     → domain-canvas.md    ┐
-                                          ├── behavior-matrix   → behavior-matrix.md  ├ full mode only
-                                          └── opportunity-brief → opportunity-brief.md┘
-                                                ↓
-                          ┌─────────────────────┴──────────────────────┐
-                          │ TARGET = Claude Code plugin                  │ TARGET = runnable ontology
-                          ▼                                              ▼
-                  skill-design                                   /studio-ontology:model
-                    ├── trait detection   → skill-map.md           (or a filled domain-intake.md
-                    └── skill breakdown   → skill-map.md            instead of planner artifacts)
-                          ↓                                              ↓
-                  spec-generate + trait scaffolding              ontology-map → ontology-map.md (5-element IR)
-                          ↓                                              ↓ user reviews IR
-          studio/changes/{plugin}/   {target_dir}/               ontology-compile
-          ├── brief.md               skills/{skill}/SKILL.md        → {target_dir}/__init__.py + mappings + cq + plugin.yaml
-          └── plugin.json.draft      commands/{skill}.md            (declarative auto; function-backed / write-back = TODO(FDE))
-                          ↓                                              ↓ FDE fills skeletons in engine repo
-          build-skills (initial drafts)                          ontology-validate (structure · governance · CQ)
-                          ↓                                              ↓
-          test + iterate with skill-creator                      clife-onto-engine plugins/{ontology_id}/
-                          ↓                                       runs as governed OAG (do/query · audit · rollback)
-          /studio-quality:validate
-                          ↓
-          /studio-core:promote (versioned: v0.1 → v0.2)
-                          ↓
-  studio/archive/{plugin}/{date}-iteration-{N}/   {target_dir}/.claude-plugin/
-  (snapshot — originals stay in changes/)          plugin.json (version bumped)
+/studio-core:init → studio/
+        +
+business analysis  (studio-planner:plan)
+  event-storm → domain-model → behavior-matrix / domain-canvas / process-flow
+        │  one analysis, two layers
+        ├──────────────────────────────────────────────┬───────────────────────────────────────
+        ▼  INTERACTION layer  (how users/agents talk)   ▼  GOVERNED substrate  (what can be done, & the rules)
+   studio-planner                                    studio-ontology   (or a filled domain-intake.md as input)
+     skill-design → spec-generate                      ontology-map → ontology-map.md (5-element IR)
+       → Claude Code plugin (skills/agents)                ↓ user reviews IR
+       → build-skills → /studio-quality:validate         ontology-compile
+       → /studio-core:promote (v0.1 → v0.2)                 → {target_dir}/__init__.py + mappings + cq + plugin.yaml
+        │                                                   (declarative auto; function-backed/write-back = TODO(FDE))
+        │                                                    ↓ FDE fills skeletons
+        │                                                  ontology-validate (structure · governance · CQ)
+        │                                                    ↓
+        │   ── at runtime, skills CALL the ontology ──▶  clife-onto-engine  plugins/{ontology_id}/
+        │      (MCP tools / Session.ask / HTTP /ask)     governed OAG: do (Action: guard→rollback→audit) / query (OQL)
+        └──────────────────────────────────────────────────┘
+
+Deployment shapes (pick per product, not a hard fork):
+  • Governed assistant   = BOTH layers — skills on top of the ontology        ← most common
+  • Structured UI / workflow = ontology only — forms/workflow call Action endpoints (no conversational skills)
+  • Open Q&A / RAG only   = skills/RAG only — no governed writes, no ontology
 ```
 
 ## Architecture
