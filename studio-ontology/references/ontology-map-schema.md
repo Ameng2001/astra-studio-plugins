@@ -126,7 +126,9 @@
 | 乡土合规 | hard | function | post_write | 出一地一方 | 种子包草种须在本地乡土名录内 | 乡土草种名录 | GB/T 37067, DB15/T 草原修复规程 | TODO(FDE): 查地块 region 的乡土名录，校验 species ⊆ 名录 |
 ```
 
-> **规则三问**（FDE 抽规则时逐条问）：① 违反要不要拦回滚（hard/soft）？② 校验只看入参还是要查图谱（declarative/function）？③ 依据是哪条标准/口径（source/citations）—— 没有依据的规则要标 `TODO(FDE): 补依据`，ontology-validate 会审计出来。
+> **规则三问**（FDE 抽规则时逐条问）：① 违反要不要拦回滚（hard/soft）？② 校验只看入参还是要查图谱（declarative/function）？③ 依据是哪条标准/口径（source/citations）。
+>
+> **source 取值约定**：具体依据写标准号/方法学/专家口径（如 `乡土草种名录`）；**自明/常识类**（budget>=0、角色集合等，多为 declarative）写 `通用`——这是合法值，编译时透传、ontology-validate 治理审计**放行不算缺依据**。真没依据又非自明的，标 `TODO(FDE): 补依据`，审计会拦。
 
 ---
 

@@ -25,7 +25,10 @@ user-invocable: true
 - 五要素无悬空引用（orphan ref）。
 
 ### B. 治理审计（静态，always）—— 对齐 OKF 来源可查
-- **每条 Rule 必须有 `source` + `citations`**。缺者列为"治理缺口"（`TODO(FDE): 补依据`），输出清单。
+- **每条 Rule 必须有 `source`**。判定：
+  - `source` 为空 或 = `TODO(FDE): 补依据` → **治理缺口**，列入清单。
+  - `source = "通用"`（自明/常识，如 budget>=0、角色集合）→ **合规**，不算缺口。
+  - function-backed / 合规类规则应有具体 `citations`（标准号/方法学）；缺者告警（非 BLOCKER）。
 - 合规/对外凭证/定级定价类 Action 应设 `hil`；未设者告警。
 - 这一步等价于 clife-onto-engine `export_okf` 的"无引用规则审计"，但在交付前就拦。
 

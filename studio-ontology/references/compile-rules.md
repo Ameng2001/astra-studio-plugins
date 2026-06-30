@@ -92,17 +92,20 @@ def rfv_grade(ctx) -> str:
 公共：`severity`→`Severity.HARD|SOFT`，`backing`→`Backing.DECLARATIVE|FUNCTION`，`evaluation`→`Evaluation.PRE|POST_WRITE`，`source`/`citations` 原样带上（供 OKF 导出）。
 
 **4a. declarative（可全自动，从 `check`）**
-**IR**：`| 预算非负 | hard | declarative | pre | … | budget is None or budget >= 0 → 合法 |`
+**IR**：`| 预算非负 | hard | declarative | pre | … | 通用 | — | budget is None or budget >= 0 → 合法 |`
 **→**：
 ```python
-@spi.rule(ONTOLOGY, "预算非负", backing=Backing.DECLARATIVE, severity=Severity.HARD)
+@spi.rule(ONTOLOGY, "预算非负", backing=Backing.DECLARATIVE, severity=Severity.HARD,
+          source="通用")                              # ← source 透传（含 "通用"），治理审计据此放行
 def 预算非负(ctx) -> RuleResult:
     budget = ctx.params.get("budget")
     if not (budget is None or budget >= 0):          # ← 取自 check（取反为违反条件）
         return RuleResult.fail("预算不能为负", suggestion="提供 budget >= 0")
     return RuleResult.ok()
 ```
-> 角色权限类 guard 同理：从 `check`（如 `role in {施工方,牧民,监管}`）直接生成。
+> **source 必须透传**，declarative 规则也不例外：IR 给了 `source=通用`（自明/常识，如 budget>=0、角色集合）就编成 `source="通用"`。
+> 这样 ontology-validate 的治理审计把"通用"视为合规、不算缺依据——**只有 source 为空或 `TODO(FDE): 补依据` 的才是治理缺口**。
+> 角色权限类 guard 同理：从 `check`（如 `role in {施工方,牧民,监管}`）直接生成，并带 `source="通用"`。
 
 **4b. function-backed（骨架 + TODO，挂出处）**
 **IR**：`| 乡土合规 | hard | function | post_write | 出一地一方 | … | 乡土草种名录 | GB/T 37067, DB15/T | TODO(FDE): 查地块 region 的乡土名录，校验 species⊆名录 |`
