@@ -1,0 +1,8 @@
+# 能力验证问题（CQ / 黄金问题集）—— 由 ontology-map 第 7 段编译生成
+# expect: query | action(<动作名>) | rejected(<规则名>)
+- q: "{{示例：这块地属于什么退化等级？}}"
+  expect: query
+- q: "{{示例：给 X 生成方案并派发}}"
+  expect: action({{动作名}})
+- q: "{{示例：用违规项给 X 出方案}}"
+  expect: rejected({{规则名}})

@@ -1,0 +1,15 @@
+{
+  "name": "studio-ontology",
+  "version": "0.1.0",
+  "description": "FDE pipeline — compile business analysis into a runnable digital-intelligent ontology (clife-onto-engine five-element schema: Object / Link / Function / Rule / Action). Bridges DDD domain modeling (event storm, bounded contexts, behavior matrix) to an executable OAG ontology plugin. Consumes studio-insight / studio-planner artifacts; emits a clife-onto-engine plugin (schema YAML + rule/action handler skeletons + mapping + CQ).",
+  "author": {
+    "name": "VanLengs",
+    "url": "https://github.com/VanLengs"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["ontology", "ddd", "oag", "fde", "clife-onto-engine", "domain-modeling", "knowledge-graph", "palantir"],
+  "dependencies": ["studio-core"],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "agents": "./agents/"
+}

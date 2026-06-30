@@ -40,6 +40,11 @@
       "name": "studio-design",
       "source": "./studio-design",
       "description": "Design-to-code pipeline — screenshot → Pencil prototype → OpenSpec proposal → working code"
+    },
+    {
+      "name": "studio-ontology",
+      "source": "./studio-ontology",
+      "description": "FDE pipeline — compile business analysis (DDD/event-storm) into a runnable clife-onto-engine ontology plugin (five-element schema: Object/Link/Function/Rule/Action)"
     }
   ]
 }

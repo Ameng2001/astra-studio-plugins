@@ -1,0 +1,10 @@
+plugin: {{ontology_id}}
+ontology_id: {{ontology_id}}
+version: 0.1.0
+engine_compat: ">=0.1.0"
+bounded_context: {{bounded_context}}
+provides:
+  schema: __init__.py
+  mappings: ./mappings/objects.yaml
+  cq: ./cq/golden.yaml
+generated_by: studio-ontology
