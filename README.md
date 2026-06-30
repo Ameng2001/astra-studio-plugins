@@ -232,7 +232,7 @@ Validated end-to-end on real material: the compiled grass plugin is **structural
 
 ## Full Workflow
 
-One upstream analysis feeds **two layers** of the same system — they are **not** mutually exclusive. studio-ontology produces the **governed substrate** (the ontology / OAG runtime); studio-planner produces the **interaction layer** (skills / agents). At runtime the skills **call** the ontology — skills are the caller, the ontology is the callee.
+One upstream analysis feeds **two layers** of the same system — they are **not** mutually exclusive. studio-ontology produces the **governed substrate** (the ontology / OAG runtime); studio-planner produces the **interaction layer** (skills / agents). At runtime the skills **call** the ontology — skills are the caller, the ontology is the callee. (Runtime-side view of the same layering: clife-onto-engine [**本体是底座，skill 是调用方**](https://github.com/Ameng2001/clife-onto-engine#layering).)
 
 ```
 /studio-core:init → studio/
