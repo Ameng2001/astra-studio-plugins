@@ -1,5 +1,7 @@
 # Astra Studio
 
+> 🛠️ **建模端**（本仓库）。其中 **studio-ontology** 把业务分析编译成可运行本体，跑在运行时端 [**clife-onto-engine**](https://github.com/Ameng2001/clife-onto-engine)（OAG：受治理的做/查·审计·回滚）。关系见 [Full Workflow](#full-workflow)。
+
 A **Claude Code plugin marketplace** for planning, designing, validating, and shipping plugins.
 
 Astra Studio handles the **outer loop** of plugin development — business analysis, domain modeling, plugin validation, and promotion. Individual skill authoring and testing is executed through the official [`skill-creator`](https://github.com/anthropics/skills/tree/main/skills/skill-creator) as an internal pipeline capability.
