@@ -62,7 +62,7 @@ plugin-name/
 
 ## Key Files
 
-- `.claude-plugin/marketplace.json`: Marketplace manifest — registers all 5 plugins with source paths
+- `.claude-plugin/marketplace.json`: Marketplace manifest — registers all 9 plugins with source paths
 - `.claude-plugin/plugin.json`: Root-level marketplace metadata
 - `*/plugin.json`: Per-plugin metadata — name, description, version, dependencies
 - `commands/*.md`: Slash commands invoked as `/plugin:command-name`
@@ -183,4 +183,4 @@ build-skills → initial drafts via skill-creator (test & iterate before validat
 1. Edit SKILL.md files directly — changes take effect immediately when loaded via `--plugin-dir`
 2. Test commands with `/plugin:command-name` syntax (e.g., `/studio-core:init`)
 3. Skills trigger automatically when their description matches user intent
-4. Test locally: `claude --plugin-dir ./studio-core --plugin-dir ./studio-insight --plugin-dir ./studio-planner --plugin-dir ./studio-quality`
+4. Test locally: `claude --plugin-dir ./studio-core --plugin-dir ./studio-insight --plugin-dir ./studio-planner --plugin-dir ./studio-quality` (add `--plugin-dir` for whichever others you are touching)

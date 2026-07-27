@@ -2,7 +2,7 @@
 
 **从业务洞察到生产级插件 —— 方法论驱动的插件开发流程**
 
-> Version 0.1.0 | 2026 年 3 月
+> Version 0.2.0 | 2026 年 7 月
 
 ---
 
@@ -302,7 +302,9 @@ graph TD
 
 ## 4. 架构总览
 
-### 4.1 四个插件
+### 4.1 插件矩阵
+
+工具链的**核心四件套**构成完整的规划闭环：
 
 ```mermaid
 graph TB
@@ -340,6 +342,17 @@ graph TB
     DM2 -.->|调用| OB2
 ```
 
+在核心四件套之上，有四个**交付向**工具链插件，各自消费规划产出物：
+
+| 插件 | 技能数 | 消费什么 | 产出什么 |
+|------|-------|---------|---------|
+| studio-docs | 6 | 规划产出物 + 文档蓝图 | 正式项目文档（方案/可研/招投标），支持 MD/DOCX/PDF |
+| studio-platform | 6 | 规划产出物 | 行业大模型平台文档套件（脑图、智能体映射、数仓/知识图谱/ML/RAG 设计、项目计划、.pen 可视化、迎检话术） |
+| studio-design | 3 | UI 截图 / .pen 原型 | Pencil 原型 → OpenSpec 提案 → 可运行代码 |
+| studio-ontology | 3 | 事件风暴 / 行为矩阵 / 领域画布，或领域接入规格 | 可运行的 clife-onto-engine 本体插件（五元组：Object/Link/Function/Rule/Action） |
+
+此外仓库还分发一个**垂直插件** `fund-review`（4 个技能 + 40 个 Python 脚本）—— 它不是工具链的一部分，而是工具链**产出**的领域插件，放在同一个 marketplace 里分发。它是本方法论的端到端验证：政府信息化采购的报价优化与财评预审，从事件风暴一路走到可安装插件。
+
 ### 4.2 依赖关系
 
 ```mermaid
@@ -348,12 +361,21 @@ graph LR
     INSIGHT[studio-insight<br/>零依赖]
     PLANNER[studio-planner<br/>依赖 core + insight]
     QUALITY[studio-quality<br/>零依赖]
+    DOCS[studio-docs<br/>依赖 core]
+    PLATFORM[studio-platform<br/>依赖 core]
+    DESIGN[studio-design<br/>零依赖]
+    ONTOLOGY[studio-ontology<br/>依赖 core]
 
     PLANNER --> CORE
     PLANNER --> INSIGHT
+    DOCS --> CORE
+    PLATFORM --> CORE
+    ONTOLOGY --> CORE
 ```
 
-四个插件中有三个**零依赖**，可以独立安装和使用。
+八个工具链插件中有三个**零依赖**（core、insight、quality）加 design，可以独立安装和使用。studio-docs / studio-platform / studio-ontology 只硬依赖 studio-core，规划产出物是软消费——没有也能跑，只是要手工补输入。
+
+垂直插件 `fund-review` 零插件依赖，但需要 Python 环境（`openpyxl`、`python-docx`）；它自带 `.fund-review/` 运行态工作区，与服务插件开发的 `studio/` 相互独立。
 
 ### 4.3 两级工作区模型
 
@@ -415,6 +437,33 @@ graph TD
 | studio-planner | build-skills | 流水线 | — | 初始填充（调用 skill-creator 产出可工作的初稿） |
 | studio-quality | plugin-validator | 质量 | — | 校验报告 |
 | studio-quality | mcp-wiring | 质量 | — | .mcp.json 配置 |
+| studio-docs | define-blueprint | 交付 | — | 文档蓝图（结构 + 合规规则 + 导出格式） |
+| studio-docs | create-doc-expert | 交付 | — | 写作专家定义（风格 + 术语 + 引用习惯） |
+| studio-docs | plan-document | 交付 | — | 章节映射 + 并行写作策略 |
+| studio-docs | write-section | 交付 | 写作专家 | 单章正文（支持断点恢复） |
+| studio-docs | assemble-document | 交付 | — | 合稿文档 + 质量报告 |
+| studio-docs | export-document | 交付 | — | DOCX / PDF（Mermaid 渲染 + 公文排版） |
+| studio-platform | generate-brainmap | 交付 | — | 脑图索引 + 分模块智能体详情 |
+| studio-platform | generate-agent-mapping | 交付 | 架构师 | 智能体 ↔ 插件 ↔ 技能映射 + 架构图 |
+| studio-platform | generate-tech-designs | 交付 | 架构师 | 数仓 / 采集 / 知识图谱 / ML / RAG 五份设计 |
+| studio-platform | generate-project-plan | 交付 | — | 并行开发轨 + 甘特图 + 里程碑 + 风险 |
+| studio-platform | generate-platform-visual | 交付 | — | 四帧 .pen 可视化 |
+| studio-platform | generate-speech | 交付 | — | 迎检 / 汇报话术 |
+| studio-design | screenshot-to-pencil | 设计 | — | .pen 原型 |
+| studio-design | pencil-to-openspec | 设计 | — | OpenSpec 变更提案 |
+| studio-design | openspec-to-code | 设计 | — | React / Next.js 代码 |
+| studio-ontology | model | FDE | 本体架构师 | 五元组本体 IR |
+| studio-ontology | map | FDE | 规则工程师 | 数据源 → 本体映射 + 规则分诊 |
+| studio-ontology | compile | FDE | — | 可运行 clife-onto-engine 插件（schema YAML + handler 骨架 + CQ） |
+
+垂直插件 `fund-review` 的技能（不属于工具链，列此对照）：
+
+| 插件 | 技能 | 类型 | 主导角色 | 产出物 |
+|------|------|------|---------|--------|
+| fund-review | init-session | 运行时 | — | `.fund-review/{session-id}/`（standard.json + quote.json） |
+| fund-review | quote-optimize | 运行时 | 报价优化师 | optimize-suggestions.json（带标准出处，等人工审批） |
+| fund-review | quote-rewrite | 运行时 | — | quote-final.xlsx + 变更日志 |
+| fund-review | quote-review | 运行时 | 财评审核员 | 评分报告（每条结论配标准页码 + 章节） |
 
 ---
 
@@ -497,13 +546,19 @@ mindmap
 
 ```bash
 # 注册 marketplace
-claude plugin marketplace add github:VanLengs/astra-studio-plugins
+claude plugin marketplace add github:Ameng2001/astra-studio-plugins
 
-# 安装全部四个插件
+# 安装核心四件套
 claude plugin install studio-core@astra-studio
 claude plugin install studio-insight@astra-studio
 claude plugin install studio-planner@astra-studio
 claude plugin install studio-quality@astra-studio
+
+# 按需加装交付向插件
+claude plugin install studio-docs@astra-studio
+claude plugin install studio-platform@astra-studio
+claude plugin install studio-design@astra-studio
+claude plugin install studio-ontology@astra-studio
 ```
 
 ### 6.2 初始化项目
@@ -563,6 +618,16 @@ studio/
 | `/studio-insight:opportunity-brief` | 生成机会评估 |
 | `/studio-quality:validate {path}` | 校验插件结构 |
 | `/studio-quality:wire-mcp {path}` | 配置 MCP 连接 |
+| `/studio-docs:generate {plugin}` | 从规划产出物生成正式文档 |
+| `/studio-docs:blueprint` | 定义/定制文档蓝图 |
+| `/studio-docs:writer` | 创建写作专家 |
+| `/studio-docs:export {file}` | 导出 DOCX / PDF |
+| `/studio-platform:platform-docs {domain}` | 生成平台文档套件（6 步） |
+| `/studio-design:design` | 截图 → 原型 → 提案 → 代码全链 |
+| `/studio-ontology:model {domain}` | 建五元组本体 IR |
+| `/studio-ontology:map` | 数据源映射 + 规则分诊 |
+| `/studio-ontology:compile` | 编译成可运行本体插件 |
+| `/studio-ontology:validate` | 校验本体一致性 |
 
 ---
 
@@ -1175,4 +1240,4 @@ stateDiagram-v2
 ---
 
 *Astra Studio 基于 Apache-2.0 许可证开源。*
-*仓库：github.com/VanLengs/astra-studio-plugins*
+*仓库：github.com/Ameng2001/astra-studio-plugins*
