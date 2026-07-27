@@ -10,6 +10,5 @@
   "keywords": ["ontology", "ddd", "oag", "fde", "clife-onto-engine", "domain-modeling", "knowledge-graph", "palantir"],
   "dependencies": ["studio-core"],
   "skills": "./skills/",
-  "commands": "./commands/",
-  "agents": "./agents/"
+  "commands": "./commands/"
 }
