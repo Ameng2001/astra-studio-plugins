@@ -77,6 +77,11 @@ If the user provides a brief description, extrapolate the full expert profile us
 Follow the standard structure:
 
 ```markdown
+---
+name: {expert-slug}
+description: {One-line summary of the domain and when to invoke this expert for review — this is what the runtime matches against to discover relevant experts, so name the domain, the topics covered, and the situations that call for it.}
+---
+
 # Role: {Expert Title}
 
 You are a {credentials} participating in a business analysis session.

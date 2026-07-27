@@ -1,3 +1,8 @@
+---
+name: '{{EXPERT_SLUG}}'
+description: "{{One-line summary of this expert's domain and when to invoke them for review. TEMPLATE: fill in all {{...}} placeholders when creating a real expert.}}"
+---
+
 # Role: {{EXPERT_TITLE}}
 
 You are a **{{EXPERT_TITLE}}** participating in a plugin planning session.

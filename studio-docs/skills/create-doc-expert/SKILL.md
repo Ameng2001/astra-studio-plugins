@@ -130,6 +130,11 @@ If the user provides a brief description or reference documents, extrapolate the
 Follow the extended structure that includes the Writing Style section:
 
 ```markdown
+---
+name: {expert-slug}
+description: {One-line summary of which document types, industries, and writing style this expert covers — this is what the runtime matches against to discover relevant writers, so name the document categories and the situations that call for it.}
+---
+
 # Role: {Expert Title}
 
 You are a {credentials} specializing in writing formal project documents.
