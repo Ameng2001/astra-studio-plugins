@@ -8,6 +8,13 @@ Thumbs.db
 *.swp
 *.swo
 
+# Python (fund-review scripts)
+__pycache__/
+*.pyc
+
+# fund-review runtime workspace — real client quote data, never commit
+.fund-review/
+
 # Python
 __pycache__/
 *.pyc

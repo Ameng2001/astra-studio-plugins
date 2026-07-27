@@ -19,6 +19,14 @@ Astra Studio handles the **outer loop** of plugin development — business analy
 | **studio-design** | 4 | Design-to-code — screenshot → Pencil prototype → OpenSpec proposal → working code | `claude plugin install studio-design@astra-studio` |
 | **studio-ontology** | 3 | **FDE pipeline** — compile business analysis (DDD/event-storm, or a domain-intake spec) into a runnable [clife-onto-engine](https://github.com/Ameng2001/clife-onto-engine) ontology plugin (five-element schema: Object/Link/Function/Rule/Action) | `claude plugin install studio-ontology@astra-studio` |
 
+Plus one **vertical plugin** — built *with* the studio toolchain rather than being part of it:
+
+| Plugin | Skills | What it does | Install |
+|--------|--------|-------------|---------|
+| **fund-review** | 4 | 政府信息化采购**报价优化 + 财评预审** — 解析预算支出标准与报价表，出带标准出处的优化建议（人工审批后）重写报价表，产出评分报告 | `claude plugin install fund-review@astra-studio` |
+
+> **fund-review** needs Python with `openpyxl` and `python-docx` for spreadsheet/document I/O. It ships a mapping pack for《柳州市本级信息化建设项目预算支出标准》柳财审〔2020〕16号; other localities need their own mapping pack under `references/mapping/`.
+
 > **studio-ontology** bridges astra-studio (modeling) to **[clife-onto-engine](https://github.com/Ameng2001/clife-onto-engine)** (OAG runtime). It is the Palantir-style **Foundry → FDE → Ontology** modeling front-end: business analysis → five-element ontology IR → a runnable governed-action plugin. Validated end-to-end on real material (output isomorphic to the hand-built `plugins/grass`).
 
 ## Quick Start

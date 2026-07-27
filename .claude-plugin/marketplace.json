@@ -45,6 +45,11 @@
       "name": "studio-ontology",
       "source": "./studio-ontology",
       "description": "FDE pipeline — compile business analysis (DDD/event-storm) into a runnable clife-onto-engine ontology plugin (five-element schema: Object/Link/Function/Rule/Action)"
+    },
+    {
+      "name": "fund-review",
+      "source": "./fund-review",
+      "description": "Government IT procurement quote optimization + financial review pre-audit — parse budget standard and quotes, produce standards-cited optimization suggestions, rewrite spreadsheets per approved plan, score review reports"
     }
   ]
 }

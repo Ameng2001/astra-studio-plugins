@@ -1,0 +1,19 @@
+{
+  "name": "fund-review",
+  "version": "0.5.1",
+  "description": "Quote optimization + financial review pre-audit plugin for government IT procurement. Generates standards-aligned optimization suggestions, rewrites quote spreadsheets per approved plan, and produces scored review reports with traceable citations to the local budget standard.",
+  "author": {
+    "name": "junchang.w@gmail.com"
+  },
+  "keywords": [
+    "fund-review",
+    "quote-optimize",
+    "budget-standard",
+    "财评",
+    "报价优化",
+    "柳州",
+    "幼教"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/"
+}

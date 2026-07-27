@@ -4,6 +4,7 @@ This is a marketplace of Claude Code plugins for plugin development workflows. E
 
 ## Repository Structure
 
+Toolchain plugins (`studio-*`) — the studio itself:
 ```
 ├── studio-core/         # Workspace management (init, promote, status, create-expert) — 4 skills
 ├── studio-insight/      # Business analysis toolkit (personas, journeys, processes, domains) — 6 skills
@@ -11,6 +12,13 @@ This is a marketplace of Claude Code plugins for plugin development workflows. E
 ├── studio-quality/      # Quality assurance (plugin validation, MCP wiring) — 2 skills
 ├── studio-docs/         # Document delivery suite (blueprints, writing experts, parallel generation, export) — 6 skills
 ├── studio-platform/     # Platform documentation generator (brainmap, agent mapping, tech designs, visualization) — 6 skills
+├── studio-design/       # Design-to-code (screenshot → Pencil → OpenSpec → code) — 4 skills
+├── studio-ontology/     # FDE pipeline — compile business analysis into a clife-onto-engine ontology — 3 skills
+```
+
+Vertical plugins — built *with* the toolchain, shipped from the same marketplace:
+```
+├── fund-review/         # 政府信息化采购报价优化 + 财评预审 — 4 skills, 40 Python scripts
 ```
 
 ## Plugin Dependencies
@@ -22,7 +30,19 @@ studio-planner   (depends on studio-core + studio-insight)
 studio-quality   (zero deps)
 studio-docs      (depends on studio-core; consumes artifacts from studio-planner + studio-insight)
 studio-platform  (depends on studio-core; consumes artifacts from studio-planner + studio-insight)
+studio-design    (zero deps; needs the Pencil MCP server for .pen files)
+studio-ontology  (depends on studio-core; targets the clife-onto-engine runtime)
+fund-review      (zero plugin deps; needs Python with openpyxl + python-docx)
 ```
+
+## Vertical Plugins
+
+`fund-review` is not part of the studio toolchain — it is a domain plugin that the toolchain produced, kept here so it ships through the same marketplace. Two things distinguish it from the `studio-*` plugins:
+
+- **Runtime workspace**: it is `stateful` and keeps sessions under `.fund-review/{session-id}/` in the *user's* project (the `stateful` trait convention), not under `studio/`.
+- **External dependencies**: its 40 scripts need Python with `openpyxl` and `python-docx`; no `studio-*` plugin requires third-party packages.
+
+Its design documents live in the separate `fund-review-plugins` repo (`studio/changes/fund-review/`), not here.
 
 ## Plugin Structure
 

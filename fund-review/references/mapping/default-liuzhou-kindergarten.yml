@@ -1,0 +1,240 @@
+pack_id: default-liuzhou-kindergarten
+standard_doc_id: liufuhshen-2020-16
+version: 0.2
+description: |
+  广西柳州数智幼教项目映射包 — 全 PDF 解析完成版。
+  覆盖：定制软件 / OA / 网站 / 软硬件购置 / 系统集成 / 设计监理测试 / 等保风险 / 培训 / 运维 / 租赁。
+  对应标准：《柳州市本级信息化建设项目预算支出标准（试行）》柳财审〔2020〕16号
+
+# 标准章节锚点快查表 — 供 mapping rules 引用
+section_anchors:
+  软件开发-功能点法:          { section_id: "三.(一).2.1",   page: 13 }
+  软件类别调整因子表:         { section_id: "三.(一).2.1.表3", page: 14 }
+  OA系统:                   { section_id: "三.(一).2.2",   page: 15 }
+  门户网站:                 { section_id: "三.(一).2.3",   page: 16 }
+  软件产品购置:             { section_id: "三.(一).2.4",   page: 17 }
+  硬件设备购置:             { section_id: "三.(一).2.5",   page: 18 }
+  LED显示屏:                { section_id: "三.(一).2.5.(4)", page: 20 }
+  系统集成费:               { section_id: "三.(一).2.6.1", page: 20 }
+  系统集成临时人员:         { section_id: "三.(一).2.6.1.表10", page: 21 }
+  设计咨询费:               { section_id: "三.(一).2.6.2", page: 21 }
+  工程监理费:               { section_id: "三.(一).2.6.3", page: 22 }
+  测试测评费:               { section_id: "三.(一).2.6.4", page: 23 }
+  等保测评费:               { section_id: "三.(一).2.6.5", page: 24 }
+  风险评估费:               { section_id: "三.(一).2.6.6", page: 24 }
+  专家评审费:               { section_id: "三.(一).2.6.7", page: 24 }
+  重复内容只计一次:         { section_id: "三.(一).2.7",   page: 24 }
+  培训费:                   { section_id: "三.(一).2.8",   page: 24 }
+  预备费:                   { section_id: "三.(一).2.9",   page: 25 }
+  租赁与购买服务:           { section_id: "三.(二)",       page: 25 }
+  运维-硬件:                { section_id: "三.(三).1",     page: 26 }
+  运维-硬件标准一:          { section_id: "三.(三).1.3.(1).①", page: 26, formula: "设备采购费×5%×调整系数" }
+  运维-硬件分散部署:        { section_id: "三.(三).1.3.(2).②", page: 26, formula: "设备采购费×8%" }
+  运维-软件:                { section_id: "三.(三).2",     page: 27 }
+  运维-软件人年费率:        { section_id: "三.(三).2.5",   page: 31, range: [83900, 125900] }
+  通知正文-厉行节约:        { section_id: "正文一",        page: 1 }
+
+rules:
+  # ============ 平台软件 ============
+  - id: PLT-VIZ
+    when: { workbook_kind: platform, content_match: [可视化, 大屏, 地图, 趋势, 看板, 热力, 仪表盘] }
+    map_to:
+      - section_id: "三.(一).2.1"
+        category: 大数据多媒体
+        reuse: 低
+        method: 功能点法
+
+  - id: PLT-BIZ
+    when: { workbook_kind: platform, content_match: [管理, 申报, 审批, 记录, 表单, 流程, 通知, 公告] }
+    map_to:
+      - section_id: "三.(一).2.1"
+        category: 业务处理
+        reuse: 低
+        method: 功能点法
+
+  - id: PLT-INTEG
+    when: { workbook_kind: platform, content_match: [接口, 集成, 总线, 同步, 对接, API] }
+    map_to:
+      - section_id: "三.(一).2.1"
+        category: 应用集成
+        reuse: 低
+        method: 功能点法
+
+  # 平台 + OA 强相关时，引用 OA 标准 (例：邮件/资产/财务)
+  - id: PLT-OA-LIKE
+    when: { workbook_kind: platform, content_match: [邮件, 即时通讯, 资产管理, 财务管理, 移动办公] }
+    map_to:
+      - section_id: "三.(一).2.2"
+        method: OA单项标准
+        note: "适用 OA 表4 单价；移动办公部分不得超过总预算 30%"
+
+  - id: PLT-DEPLOY
+    when: { workbook_kind: platform, sheet_kind: deploy, content_match: [实施, 部署, 培训, 调试, 现场] }
+    map_to:
+      - section_id: "三.(一).2.6.1"
+        method: 系统集成费率
+        rate_range: [0.03, 0.08]
+        note: "若供应商承担总集成，集成费可在工程费用中计列；若按人力计费，参考表10 集成专业技术 1000 元/人天"
+
+  # ============ 行业大模型 ============
+  - id: LLM-BASE
+    when: { workbook_kind: llm, content_match: [底座, 数智底座, 基础设施, 算力, 部署平台] }
+    map_to:
+      - section_id: "三.(一).2.1"
+        category: 人工智能
+        reuse: 低
+        method: 功能点法
+        note: "AI 类别调整因子 1.0-1.5；运行所需服务器/算力归入 表7 硬件购置 或 表9 系统集成"
+
+  - id: LLM-KE-BUILD
+    when: { workbook_kind: llm, content_match: [知识工程, 知识图谱, 知识库构建, 本体, 抽取] }
+    map_to:
+      - section_id: "三.(一).2.1"
+        category: 人工智能
+        reuse: 低
+        method: 功能点法
+
+  - id: LLM-DATA-BUILD
+    when: { workbook_kind: llm, content_match: [数据建设, 数据集, 标注, 数据治理, 数据清洗] }
+    map_to:
+      - section_id: "三.(一).2.1"
+        category: 人工智能
+        reuse: 低
+        method: 功能点法
+        note: "数据集采购属直接非人力成本，需在 直接非人力成本 项目下说明"
+
+  - id: LLM-MODEL-L2-BUILD
+    when: { workbook_kind: llm, content_match: [专业模型, L2, 模型微调, 训练, 蒸馏, 行业模型] }
+    map_to:
+      - section_id: "三.(一).2.1"
+        category: 人工智能
+        reuse: 中
+        method: 功能点法
+        note: "L2 行业模型基于 L1 底座，建议复用度调整因子取「中」(2/3)"
+
+  - id: LLM-AGENT-L2-BUILD
+    when: { workbook_kind: llm, content_match: [智能体, agent, 场景智能体] }
+    map_to:
+      - section_id: "三.(一).2.1"
+        category: 人工智能
+        reuse: 中
+        method: 功能点法
+
+  # 运营/运维 (L1/L2 ops) → 走 软件运维 2.5
+  - id: LLM-OPS-TOKEN
+    when: { workbook_kind: llm, sheet_kind: ops, content_match: [token, 调用, API, 推理, 算力费, 在线服务] }
+    map_to:
+      - section_id: "三.(三).2.4.2"
+        method: 软件运维-规模单价法
+        formula: "（软件规模×运维功能点单价）×运维级别×运维能力×系统特征 + 直接非人力"
+        note: "运维标准 8.39-12.59 万/人年，token 成本属直接非人力成本（推理算力费），不可与人力运维重复计列"
+
+  - id: LLM-OPS-MAINT
+    when: { workbook_kind: llm, sheet_kind: ops, content_match: [运维, 数据更新, 知识库维护, 迭代] }
+    map_to:
+      - section_id: "三.(三).2.5"
+        method: 软件运维-人年单价
+        rate_range_yuan_per_man_year: [83900, 125900]
+
+  # ============ 场景设备 ============
+  - id: DEV-NETWORK
+    when: { workbook_kind: device, content_match: [交换机, 路由器, 网关, AP, 无线, VPN] }
+    map_to: [{ section_id: "三.(一).2.5", subgroup: 网络设备, method: 表7-硬件购置 }]
+
+  - id: DEV-SERVER
+    when: { workbook_kind: device, content_match: [服务器, 工作站, 小型机] }
+    map_to: [{ section_id: "三.(一).2.5", subgroup: 主机设备, method: 表7-硬件购置 }]
+
+  - id: DEV-STORAGE
+    when: { workbook_kind: device, content_match: [存储, 磁盘阵列, 备份, NAS, SAN] }
+    map_to: [{ section_id: "三.(一).2.5", subgroup: 存储和备份, method: 表7-硬件购置 }]
+
+  - id: DEV-SECURITY
+    when: { workbook_kind: device, content_match: [防火墙, 入侵检测, 加密, 安全审计, 防病毒] }
+    map_to: [{ section_id: "三.(一).2.5", subgroup: 安全设备, method: 表7-硬件购置 }]
+
+  - id: DEV-LED
+    when: { workbook_kind: device, content_match: [LED, 显示屏, 大屏, 拼接屏] }
+    map_to:
+      - section_id: "三.(一).2.5.(4)"
+        method: LED表8
+        constraint: "室内≤P1.5；室外≤P4；不得超标准配备"
+
+  - id: DEV-SMART
+    when: { workbook_kind: device, content_match: [智能, 摄像头, 监控, 传感器, 一体机, 平板, 终端] }
+    map_to:
+      - section_id: "三.(一).2.5"
+        subgroup: 智能化设备
+        method: 表7-硬件购置
+        note: "幼教场景智能设备多属此类；按通用产品询价，不得购置性能远超需求的产品"
+
+  - id: DEV-UNCATEGORIZED
+    when: { workbook_kind: device, default: true }   # 兜底
+    map_to:
+      - section_id: "三.(一).2.5"
+        method: 表7-硬件购置
+      - section_id: "正文一"
+        method: 厉行节约原则
+        note: "未明确归类设备引用通知正文一 厉行节约原则"
+
+  # ============ 其他费用 / 衍生科目 ============
+  - id: FEE-INTEG
+    when: { content_match: [系统集成费, 集成服务费] }
+    map_to: [{ section_id: "三.(一).2.6.1", method: 表9, rate_range: [0.03, 0.08] }]
+
+  - id: FEE-DESIGN
+    when: { content_match: [设计费, 咨询费, 方案设计, 可行性研究] }
+    map_to: [{ section_id: "三.(一).2.6.2", method: 表11-分档内插 }]
+
+  - id: FEE-MONITOR
+    when: { content_match: [监理费, 工程监理] }
+    map_to: [{ section_id: "三.(一).2.6.3", method: 表12-分档 }]
+
+  - id: FEE-TEST
+    when: { content_match: [测试费, 第三方测试, 检测费, 测评] }
+    map_to: [{ section_id: "三.(一).2.6.4", method: 表13-分档 }]
+
+  - id: FEE-DENGBAO
+    when: { content_match: [等保, 等级保护, 安全测评] }
+    map_to:
+      - section_id: "三.(一).2.6.5"
+        levels:
+          二级: { unit_price_yuan: 80000 }
+          三级: { base_yuan: 100000, multiplier_range: [1.0, 1.3] }
+
+  - id: FEE-TRAIN
+    when: { content_match: [培训费, 用户培训] }
+    map_to:
+      - section_id: "三.(一).2.8"
+        note: "按柳州市相关培训费文件执行；不包括项目方应承担的培训"
+
+  - id: FEE-RESERVE
+    when: { content_match: [预备费, 不可预见] }
+    map_to: [{ section_id: "三.(一).2.9", cap_rate: 0.02 }]
+
+vocabularies:
+  platform_feature: [功能, 特性, 模块, 配置, 页面, 流程, 表单, 报表, 看板, 配置项, 子模块, 字段]
+  llm_capability:   [能力, 推理, 生成, 知识, 智能体, 检索, 微调, token, 涌现, 多模态, 思维链, RAG]
+  forbidden_overlap:                                    # 同一条内容在 platform/llm 都出现要报警
+    triggers: [使用人工智能识别, AI识别, 智能推荐, 智能分析]
+
+labor_baselines:
+  man_month_rate: 17000
+  workdays_per_month: 21.75
+  default_per_day_rate: 781.6
+  productivity_baseline_hours_per_fp: 6.51
+  man_hours_per_month: 174
+  productivity_floor_ratio: 0.8
+  productivity_ceiling_ratio: 1.2
+  # 系统集成临时人员（表10）
+  integration_expert_per_day: 2000
+  integration_engineer_per_day: 1000
+  # 软件运维 人年单价
+  software_ops_yuan_per_man_year:
+    min: 83900
+    max: 125900
+
+other_fee_caps:
+  其他费率合计上限: 0.10          # 扣除系统集成费后其他费用合计不得超过预算总额 10%
+  预备费上限: 0.02
+  移动办公上限_相对总价: 0.30
