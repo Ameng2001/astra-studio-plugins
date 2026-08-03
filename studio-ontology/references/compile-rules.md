@@ -1,10 +1,37 @@
 # Compile Rules — ontology-map → clife-onto-engine 插件
 
 > `ontology-compile` 读 `ontology-map.md`（IR），按本规则机械编译成一个 **clife-onto-engine 插件**
-> （Python 注册 + 规则/动作 handler 骨架 + 映射 YAML + CQ）。正好填满 SPI 的 7 个槽位。
+> （Python 注册 + 规则/动作 handler 骨架 + 映射 YAML + CQ）。
 >
 > 编译目标：`{target_dir}/`（如 `plugins/grass/`，在 clife-onto-engine 仓库内）
 > 输出与 IR 的对应：IR 七段 → 下列文件。declarative 规则可全自动；function-backed 规则与 Action 副作用生成**骨架 + `TODO(FDE)`**。
+
+## ⚠️ 编译产物对 SPI 七槽位的覆盖度
+
+**编译产物不填满七槽位。** 逐格如下（口径以本文件下面各节的实际生成规则为准）：
+
+| # | 槽位 | 覆盖 | 说明 |
+|---|---|---|---|
+| **①** | Schema 包 | ✅ **全自动** | `__init__.py` 的 Object / Link 注册 ← IR §1 §2 |
+| **②** | 映射注册表 | ✅ **全自动** | `mappings/objects.yaml` ← IR §6 |
+| **③** | Function / Rule 实现 | ⚠️ **部分** | **declarative 规则全自动写完函数体**（§4a）；**function-backed 规则与 Function 派生量只出骨架 + `TODO(FDE)`**（§4b、§3） |
+| **④** | Action handlers | ⚠️ **只出骨架** | 装饰器 + `stage_write` 注释 + `set_confidence` + `raise NotImplementedError`（§5） |
+| **⑤** | 记忆词典 + 提示词骨架 | ❌ **不生成** | 输出结构里没有 `memory/`；生成的 `plugin.yaml` 的 `provides` 里也没有这一项 |
+| **⑥** | Agent 角色定义 | ❌ **不生成** | 同上，没有 `agents/`；HIL 关口只体现在 Action 的 `hil` 参数里，**没有独立的角色清单** |
+| **⑦** | CQ 验收集 | ⚠️ **产物形态不同** | 编译出的是 **`cq/golden.yaml`**（YAML）；而引擎的 `run_cq_suite` 消费的是 **Python 的 `ActionCQ` / `QueryCQ` 对象**（见 `plugins/grass/cq.py` 的 `CQ_SUITE`）。**YAML 需要人转写成 `cq.py`** |
+
+### 为什么 ⑤⑥ 不生成——是结构性的，不是待补功能
+
+**IR 里压根没有对应的段。** IR 是七段（§0 Header / §1 Objects / §2 Links / §3 Functions / §4 Rules / §5 Actions / §6 Mapping Hints / §7 CQ），
+**没有"记忆词典"段，也没有"Agent 角色"段**——编译器无中生有不出来。
+
+> 要补齐，得先给 IR 加段，那是 **IR 契约变更**，不是编译器改一改的事。
+
+### 这一节的用法
+
+- **对 FDE**：这张表就是**收尾清单的上界**——⑤⑥ 从一开始就得排进人工工时，别等编译完才发现。
+- **对客户**：准确说法是「**建模端把结构立起来，⑤⑥ 与 ③④ 的函数体要人补**」，
+  ⛔ **不要说"编译产物正好填满七槽位"**——那是本文件曾经的写法，与实际生成规则不符，已更正。
 
 ---
 
