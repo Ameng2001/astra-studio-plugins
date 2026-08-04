@@ -359,8 +359,8 @@ def main() -> None:
     before_n = len(bom.active())
 
     fn = ADJUSTMENTS[args.adjustment]
-    bom, report = (fn(bom, args.new_version, args.spec) if args.adjustment == "E"
-                   else fn(bom, args.new_version))
+    bom, report = (fn(bom, args.new_version, args.spec)
+                   if args.adjustment in ("E", "ADJ") else fn(bom, args.new_version))
     bom.validate()
 
     after = sum(W[i.nesma.type] for i in bom.active() if i.nesma)
@@ -372,6 +372,15 @@ def main() -> None:
         print(f"调整项 {args.adjustment} — {report['groups']} 组折叠")
         print(f"  有效条目 {before_n} → {after_n}"
               f"（废弃 {before_n - after_n} 条，未物理删除）")
+    elif report.get("adjustment") == "ADJ":
+        print(f"共创裁决落实 — 占位删 {report['placeholder_dropped']} / 留 "
+              f"{report['placeholder_kept']}，补 ILF {report['ilf_added']}，"
+              f"F 拆分 {report['fp_split']} / 改判 {report['fp_retyped']} / "
+              f"排除 {report['fp_excluded']}")
+        if report.get("fp_retype_pending"):
+            print(f"  ⚠ {report['fp_retype_pending']} 条已判定类型有误但目标类型"
+                  f"需人工指定（已标 retype-pending）")
+        print(f"  有效条目 {before_n} → {after_n}")
     elif "evidenced_split" in report:
         print(f"调整项 {args.adjustment} — {report['evidenced_split']} 条按原文依据拆分，"
               f"生成占位 {report['placeholders']} 条，共新增 {report['added_items']} 条")
@@ -392,6 +401,180 @@ def main() -> None:
     (args.bom / f"apply-{args.adjustment}-report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  已写入 {args.bom}（VERSION → {args.new_version}）")
+
+
+
+
+# ---- 共创裁决的落实 ----------------------------------------------------
+
+VERB_MAINTAIN = ("新增 新建 创建 添加 录入 修改 编辑 更新 删除 移除 维护 配置 设置 发布 下线 上线 "
+                 "置顶 审核 审批 分派 指派 标注 标记 绑定 解绑 提交 发起 办理 撤销 收取 启用 禁用 "
+                 "导入 上传 签约 退款 取消 改价 派单 结算 充值 提现 归档 核销 扣减 续约 报名").split()
+VERB_RETRIEVE = "查看 查阅 查询 检索 展示 显示 列表 详情 导出 浏览 下载 打印 筛选".split()
+VERB_DERIVE = ("统计 汇总 分析 计算 预测 画像 评分 排名 预警 告警 生成 趋势 占比 监控 研判 复盘 "
+               "识别 推荐").split()
+
+
+def _second_type(desc: str, imported: str) -> str:
+    """已由人工确认「确实是两个基本处理」后，判定补记的是哪一类。
+
+    难的判断（是不是真的两个）已经人工做完；这里只是按动词族确定第二类，
+    误判空间小得多。仍建议抽样复核。
+    """
+    has_r = any(v in desc for v in VERB_RETRIEVE)
+    has_d = any(v in desc for v in VERB_DERIVE)
+    if imported == "EI":
+        return "EO" if has_d and not has_r else "EQ"
+    if imported in ("EQ", "EO"):
+        return "EI"
+    return "EQ"
+
+
+def _corrected_type(desc: str, imported: str) -> str:
+    """类型判错时的目标类型 —— 按主导动作。"""
+    has_m = any(v in desc for v in VERB_MAINTAIN)
+    has_d = any(v in desc for v in VERB_DERIVE)
+    has_r = any(v in desc for v in VERB_RETRIEVE)
+    if not has_m and has_d:
+        return "EO"
+    if not has_m and has_r:
+        return "EQ"
+    if has_m:
+        return "EI"
+    return imported
+
+
+def apply_adjudications(bom: Bom, new_version: str,
+                        spec_path: Path | None = None) -> tuple[Bom, dict[str, Any]]:
+    """落实飞书共创的 500 条裁决。
+
+    三条**假设性**判定保持显式可见，不静默落地：
+      · 占位中判「独立保留」的 25 条 —— **不摘 placeholder 标记**，
+        让门禁 G-12 继续拦截，直到产品侧确认
+      · 3.4 六模块归并、智能体平台知识库去重 —— 写进 rationale 供复核
+    """
+    import csv
+
+    import yaml
+
+    spec = yaml.safe_load(Path(spec_path).read_text(encoding="utf-8"))
+    by_id = {i.id: i for i in bom.active()}
+    max_seq: dict[str, int] = defaultdict(int)
+    for it in bom.items:
+        pre, _, seq = it.id.rpartition(".")
+        if seq.isdigit():
+            max_seq[pre] = max(max_seq[pre], int(seq))
+
+    log: dict[str, Any] = {"placeholder_dropped": 0, "placeholder_kept": 0,
+                           "ilf_added": 0, "fp_split": 0, "fp_retyped": 0,
+                           "fp_excluded": 0, "fp_retype_pending": 0}
+    new_items: list[BomItem] = []
+    delta = 0
+
+    # --- G 占位裁决 ---
+    for row in spec.get("placeholders", []):
+        it = by_id.get(row["id"])
+        if it is None:
+            continue
+        if row["verdict"].startswith("共用"):
+            it.status = "deprecated"
+            it.deprecated_in = new_version
+            delta -= W[it.nesma.type]
+            log["placeholder_dropped"] += 1
+        else:
+            it.nesma.rationale = (
+                "【仍为占位，待产品侧确认】暂按各模型独有保留：领域阈值（如营养风险分级）"
+                "属模型特有参数，平台服务管理只覆盖部署与调度配置。"
+                "若实际共用一套配置界面，本条应删除。")
+            log["placeholder_kept"] += 1
+
+    # --- H 补齐 ILF（C 项裁决确认的实体）---
+    for e in spec.get("ilf_entities", []):
+        code = e["code"]
+        max_seq[code] += 1
+        new_items.append(BomItem(
+            id=f"{code}.{max_seq[code]:04d}", cls="SOFTWARE_FP", name=e["name"],
+            path=Path_(product_line=e["product_line"], system=e["system"],
+                       l1=e.get("l1"), l2=e.get("l2")),
+            description=f"{e['name']}：{e.get('note') or '本系统维护的业务逻辑数据组'}。"
+                        f"维护模块：{e.get('modules', '')}",
+            nesma=Nesma(type="ILF",
+                        rationale=("判为 ILF：系统边界内维护的、用户可识别的业务数据组"
+                                   "（表6.1 p.17）。由 " + str(e.get("modules", "")) +
+                                   " 执行新增/更改/删除，符合表8.1「EI 通常对内部逻辑文件"
+                                   "执行新增、更改或删除」的反向要求。"
+                                   "实体边界经飞书共创核对确认。"),
+                        counted_by=f"adjudication:C@{new_version}",
+                        reviewed_by=e.get("reviewed_by")),
+            app_type=e.get("app_type", "业务处理"),
+            dev_category=e.get("dev_category", "基于统一平台的软件开发"),
+            maturity="new", since=new_version, status="draft",
+            source="bom/p2-proposal/C-entities.yaml", tags=["ilf-补齐"]))
+        delta += W["ILF"]
+        log["ilf_added"] += 1
+
+    # --- I F 项裁决 ---
+    for row in spec.get("fp_verdicts", []):
+        it = by_id.get(row["id"])
+        if it is None or not it.nesma:
+            continue
+        v, desc = row["verdict"], it.description or ""
+        if v == "exclude":
+            it.status = "deprecated"
+            it.deprecated_in = new_version
+            it.nesma.rationale = ("【按标准不纳入计数】" + row.get("note", "") +
+                                  "（三.(三)4(1)/(6) p.16、表6.3 p.17）")
+            delta -= W[it.nesma.type]
+            log["fp_excluded"] += 1
+        elif v == "retype":
+            new_t = _corrected_type(desc, it.nesma.type)
+            if new_t != it.nesma.type:
+                delta += W[new_t] - W[it.nesma.type]
+                it.nesma.rationale = (
+                    f"判为 {new_t}：原导入类型 {it.nesma.type} 与描述的主导动作矛盾，"
+                    f"经逐条阅读改判（表8.1 p.19 / 表9.3 p.20 / 表10.5 p.22）。")
+                it.nesma.type = new_t
+                it.nesma.counted_by = f"{it.nesma.counted_by or ''}; retype@{new_version}"
+                log["fp_retyped"] += 1
+            else:
+                # 人工判定「类型错了」，但按动词族推不出目标类型 —— 推导失败。
+                # 不能静默保持错误类型，标出来让门禁和人看见。
+                it.nesma.rationale = (
+                    f"⚠️【类型待人工指定】逐条阅读判定当前类型 {it.nesma.type} 有误，"
+                    f"但无法由动词族机械推出目标类型 —— 需人工指定。"
+                    f"原描述：{desc}")
+                it.tags = sorted(set(it.tags) | {"retype-pending"})
+                log["fp_retype_pending"] = log.get("fp_retype_pending", 0) + 1
+        elif v == "split":
+            t2 = _second_type(desc, it.nesma.type)
+            pre = it.id.rpartition(".")[0]
+            max_seq[pre] += 1
+            it.nesma.rationale = (
+                f"判为 {it.nesma.type}：本行原含两个基本处理，经逐条阅读确认后拆分"
+                f"（表8.6 p.19）。拆出 {t2} 部分见 {pre}.{max_seq[pre]:04d}。"
+                f"原描述：{desc}")
+            new_items.append(BomItem(
+                id=f"{pre}.{max_seq[pre]:04d}", cls=it.cls,
+                name=f"{it.name}-{ {'EQ': '查询', 'EO': '统计输出', 'EI': '维护'}[t2] }",
+                path=Path_(**asdict(it.path)),
+                description=f"{it.name}：{desc}",
+                nesma=Nesma(type=t2,
+                            rationale=(f"判为 {t2}：自 {it.id} 拆出 —— 该行原含两个基本处理，"
+                                       f"经逐条阅读确认（表8.6 p.19）。原描述：{desc}"),
+                            counted_by=f"split:F-adjudicated@{new_version} from {it.id}"),
+                app_type=it.app_type, dev_category=it.dev_category,
+                maturity=it.maturity, maturity_evidence=it.maturity_evidence,
+                since=new_version, status="draft", source=it.source, tags=list(it.tags)))
+            delta += W[t2]
+            log["fp_split"] += 1
+
+    bom.items.extend(new_items)
+    bom.version = new_version
+    return bom, {"adjustment": "ADJ", "delta_ufp": delta, **log,
+                 "added_items": len(new_items)}
+
+
+ADJUSTMENTS["ADJ"] = apply_adjudications
 
 
 if __name__ == "__main__":
