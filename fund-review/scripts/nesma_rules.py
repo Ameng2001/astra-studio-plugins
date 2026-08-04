@@ -209,6 +209,28 @@ def g11_name_uniqueness(bom: Bom) -> list[Finding]:
     return out
 
 
+#: 占位条目的标记 —— 由 bom_apply 在无法从文本判定时生成，待共创环节确认
+PLACEHOLDER_TAG = "placeholder"
+
+
+def g12_placeholders(bom: Bom) -> list[Finding]:
+    """G-12 占位条目未确认 —— 必须在共创环节裁定后才能进入 reviewed。
+
+    占位是「已知的未知」：源表没写、无法从文本判定，但又不能当作不存在。
+    生成占位条目把问题显式化，靠本门禁保证它不会被遗忘地混进正式版本。
+    """
+    ph = [i for i in bom.active() if PLACEHOLDER_TAG in i.tags]
+    if not ph:
+        return []
+    by_system: dict[str, int] = defaultdict(int)
+    for i in ph:
+        by_system[i.path.system] += 1
+    return [Finding("G-12", "fail", "reviewed", "bom", "-",
+                    f"{len(ph)} 条占位条目待确认（{dict(by_system)}）—— "
+                    f"须在飞书共创环节裁定后才能进入 reviewed",
+                    {"ids": [i.id for i in ph[:20]], "total": len(ph)})]
+
+
 def g09_gpu_dependency(bom: Bom) -> list[Finding]:
     """G-09 声明需要推理算力，但 BOM 中无对应硬件条目。"""
     needy = [i for i in bom.active() if i.runtime.needs_inference_gpu]
@@ -307,6 +329,7 @@ GATES: list[Callable[[Bom], list[Finding]]] = [
     g01_identity, g02_nesma_type, g03_type_distribution, g04_missing_ilf,
     g05_description, g06_cross_system_duplicates, g07_class_consistency,
     g08_maturity_evidence, g09_gpu_dependency, g11_name_uniqueness,
+    g12_placeholders,
 ]
 
 

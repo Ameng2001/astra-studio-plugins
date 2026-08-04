@@ -224,7 +224,125 @@ def split_multi_process(bom: Bom, new_version: str) -> tuple[Bom, dict[str, Any]
                  "delta_ufp": delta, "detail": log, "pending_adjudication": pending}
 
 
-ADJUSTMENTS = {"A": collapse_data_functions, "F": split_multi_process}
+E_CITATION = "表9.15 p.21 / 表9.16 p.21"
+PLACEHOLDER_TAG = "placeholder"
+
+
+def _clone_path(it: BomItem) -> Path_:
+    return Path_(**asdict(it.path))
+
+
+def decompose_ai_assets(bom: Bom, new_version: str,
+                        spec_path: Path | None = None) -> tuple[Bom, dict[str, Any]]:
+    """调整项 E：AI 资产按**人工策展的**输出清单重拆，并为不确定项生成占位。
+
+    与 A/F 不同，E 无法从描述机械推导 —— 枚举里混着输入、测量维度与知识领域
+    （「年龄、性别、疾病史」是输入，「身高、体重、BMI」是测量项，
+    「运动学、医学、康复护理」是知识领域）。机械抽取会造出假功能点，
+    与源表当初的机械切分是同一个错误。
+
+    因此拆分依据来自人工策展的 `E-decomposition.yaml`，每条附 source_text 原文。
+    无法判定的（每个模型是否有独立配置/查询入口）生成占位条目，
+    标 tag `placeholder`，由门禁 G-12 阻止其进入 reviewed。
+    """
+    import yaml
+
+    spec = yaml.safe_load(Path(spec_path).read_text(encoding="utf-8"))
+    by_id = {i.id: i for i in bom.active()}
+    max_seq: dict[str, int] = defaultdict(int)
+    for it in bom.items:
+        prefix, _, seq = it.id.rpartition(".")
+        if seq.isdigit():
+            max_seq[prefix] = max(max_seq[prefix], int(seq))
+
+    new_items: list[BomItem] = []
+    log: list[dict[str, Any]] = []
+    delta = 0
+
+    # ---- 一、有文本依据的输出拆分 ----
+    for entry in spec.get("evidenced", []):
+        src = by_id.get(entry["id"])
+        if src is None:
+            log.append({"id": entry["id"], "status": "SKIPPED - 条目不存在"})
+            continue
+        outputs = entry["outputs"]
+        prefix = src.id.rpartition(".")[0]
+
+        # 首个输出留在原条目，其余各建一条
+        src.nesma.rationale = (
+            f"判为 EO：每个可独立运行且包含不同处理过程的功能计为一个外部输出"
+            f"（{E_CITATION}）。本模型描述列举了 {len(outputs)} 个不同输出，"
+            f"已拆分；本条对应「{outputs[0]}」。原文依据：{entry['source_text']}"
+        )
+        src.name = f"{entry['name']}-{outputs[0]}"
+        src.nesma.counted_by = f"{src.nesma.counted_by or ''}; split:E@{new_version}"
+
+        for out in outputs[1:]:
+            max_seq[prefix] += 1
+            new_items.append(BomItem(
+                id=f"{prefix}.{max_seq[prefix]:04d}", cls=src.cls,
+                name=f"{entry['name']}-{out}",
+                path=_clone_path(src),
+                description=f"{entry['name']}：{out}。",
+                nesma=Nesma(type="EO",
+                            rationale=(f"判为 EO：每个可独立运行且包含不同处理过程的功能"
+                                       f"计为一个外部输出（{E_CITATION}）。"
+                                       f"自 {src.id} 拆出，对应「{out}」。"
+                                       f"原文依据：{entry['source_text']}"),
+                            counted_by=f"split:E@{new_version} from {src.id}"),
+                app_type=src.app_type, dev_category=src.dev_category,
+                maturity=src.maturity, maturity_evidence=src.maturity_evidence,
+                runtime=Runtime(**asdict(src.runtime)),
+                since=new_version, status="draft", source=src.source,
+                tags=list(src.tags),
+            ))
+            delta += W["EO"]
+        log.append({"id": src.id, "outputs": outputs, "extra_eo": len(outputs) - 1})
+
+    # ---- 二、占位条目 ----
+    ph = spec.get("placeholders", {})
+    ph_count = 0
+    if ph:
+        scope = set(ph.get("scope_systems", []))
+        # 按实体（l3 或 l2）去重 —— 同一实体多行只生成一组占位
+        entities: dict[tuple[str, str], BomItem] = {}
+        for it in bom.active():
+            if it.path.system in scope and it.nesma:
+                key = (it.path.system, str(it.path.l3 or it.path.l2))
+                entities.setdefault(key, it)
+
+        for (system, ent_name), sample in sorted(entities.items()):
+            prefix = sample.id.rpartition(".")[0]
+            for gen in ph["generate"]:
+                max_seq[prefix] += 1
+                new_items.append(BomItem(
+                    id=f"{prefix}.{max_seq[prefix]:04d}", cls=sample.cls,
+                    name=f"{ent_name}{gen['name_suffix']}",
+                    path=_clone_path(sample),
+                    description=gen["description_template"].format(name=ent_name),
+                    nesma=Nesma(type=gen["type"],
+                                rationale=("【占位，待飞书共创确认】"
+                                           + ph["question"].strip().replace("\n", " ")),
+                                counted_by=f"placeholder:E@{new_version}"),
+                    app_type=sample.app_type, dev_category=sample.dev_category,
+                    maturity=sample.maturity,
+                    maturity_evidence=sample.maturity_evidence,
+                    since=new_version, status="draft",
+                    source=sample.source,
+                    tags=sorted({*sample.tags, ph.get("tag", PLACEHOLDER_TAG)}),
+                ))
+                delta += W[gen["type"]]
+                ph_count += 1
+
+    bom.items.extend(new_items)
+    bom.version = new_version
+    return bom, {"adjustment": "E", "citation": E_CITATION,
+                 "evidenced_split": len(log), "placeholders": ph_count,
+                 "added_items": len(new_items), "delta_ufp": delta, "detail": log}
+
+
+ADJUSTMENTS = {"A": collapse_data_functions, "F": split_multi_process,
+               "E": decompose_ai_assets}
 
 
 def main() -> None:
@@ -232,6 +350,7 @@ def main() -> None:
     ap.add_argument("--bom", required=True, type=Path)
     ap.add_argument("--adjustment", required=True, choices=sorted(ADJUSTMENTS))
     ap.add_argument("--new-version", required=True)
+    ap.add_argument("--spec", type=Path, help="调整项 E 的策展文件 E-decomposition.yaml")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -239,7 +358,9 @@ def main() -> None:
     before = sum(W[i.nesma.type] for i in bom.active() if i.nesma)
     before_n = len(bom.active())
 
-    bom, report = ADJUSTMENTS[args.adjustment](bom, args.new_version)
+    fn = ADJUSTMENTS[args.adjustment]
+    bom, report = (fn(bom, args.new_version, args.spec) if args.adjustment == "E"
+                   else fn(bom, args.new_version))
     bom.validate()
 
     after = sum(W[i.nesma.type] for i in bom.active() if i.nesma)
@@ -251,6 +372,10 @@ def main() -> None:
         print(f"调整项 {args.adjustment} — {report['groups']} 组折叠")
         print(f"  有效条目 {before_n} → {after_n}"
               f"（废弃 {before_n - after_n} 条，未物理删除）")
+    elif "evidenced_split" in report:
+        print(f"调整项 {args.adjustment} — {report['evidenced_split']} 条按原文依据拆分，"
+              f"生成占位 {report['placeholders']} 条，共新增 {report['added_items']} 条")
+        print(f"  有效条目 {before_n} → {after_n}")
     else:
         print(f"调整项 {args.adjustment} — {report['split']} 条拆分，"
               f"新增 {report['added_items']} 条")
