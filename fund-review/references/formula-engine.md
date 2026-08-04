@@ -32,7 +32,24 @@ Tri-state: `ok | warn | fail`. Warn = within ±10% of bounds.
 For software rows: returns `True` if row has plausible FP fields (UFP, ILF/EIF/EI/EO/EQ); else flags as labor-pricing finding.
 
 ### `compute_total(unit_price, qty)` / `compute_summary(rows)`
-Standard arithmetic; trivial but centralized so rewrite + review share identical rounding (currently `round-half-even, 0 decimals`).
+Standard arithmetic; centralized so rewrite + review share identical rounding.
+
+**Rounding is `nesma_weights.xlround` — Excel's ROUND, not Python's `round()`.**
+Two differences, both measurable:
+
+1. **Direction** — Excel rounds half-up; Python rounds half-even (banker's).
+   `EO(5) × 规模变更 1.21 × 应用类型 1.5 = 9.075` sits exactly on the half;
+   Excel gives 9.08, Python gives 9.07.
+2. **Precision** — Excel normalises to 15 significant digits first.
+   `8.87 × 26009.5` is `230704.26499999998` in IEEE754; normalised it becomes
+   `230704.265`, so Excel returns `.27` while a plain half-up returns `.26`.
+
+Reviewers re-check in Excel. A mismatched convention is itself a finding.
+Measured impact on a 7133-FP workbook: **¥1,418.75** — see
+`clife-elderly-care/p0-baseline/README.md`.
+
+> This file previously claimed `round-half-even, 0 decimals`. That was wrong in
+> both direction and precision, and is corrected here.
 
 ## Why pure-Python?
 LLM is bad at consistent arithmetic and citation. All numeric findings should come from this module, then the LLM adds rationale and prose.

@@ -2,11 +2,27 @@
 
 All numeric findings used by quote-optimize and quote-review come from here.
 LLM is responsible for prose only; this module is responsible for numbers.
+
+**舍入口径：全模块走 `nesma_weights.xlround`，即 Excel 的 ROUND。**
+与 Python 内置 `round()` 有两处不同，都是实打实的差别：
+
+  1. 方向：Excel 四舍五入（half-up），Python 银行家舍入（half-even）
+  2. 精度：Excel 先把二进制结果规整到 15 位有效数字再舍入
+     （`8.87 × 26009.5` 的 IEEE754 值是 `230704.26499999998`，
+      规整后成 `230704.265` → Excel 得 `.27`，直接 half-up 只能得 `.26`）
+
+财评评审会拿 Excel 复核，口径不一致即被质疑。实测依据见
+`clife-elderly-care/p0-baseline/README.md`：某 7133-FP 工作簿上差 ¥1,418.75。
+
+⚠️ 本模块的常量仍硬编码柳州取值。跨区域使用请走 `standard_pack` +
+`formula_profiles/`，那条路径的参数一律从标准包取且带 citation。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, Tuple
+
+from nesma_weights import xlround
 
 
 # ---- Defaults from 柳财审〔2020〕16号 ------------------------------------------
@@ -78,8 +94,8 @@ def compute_software_dev_cost(
 
     base = fp * productivity / MAN_HOURS_PER_MONTH * MAN_MONTH_RATE * rf
     return SoftwareDevCostRange(
-        min_cost=base * cf_min + direct_non_labor,
-        max_cost=base * cf_max + direct_non_labor,
+        min_cost=xlround(base * cf_min + direct_non_labor, 2),
+        max_cost=xlround(base * cf_max + direct_non_labor, 2),
         formula_used=(
             f"{fp} FP × {productivity:.2f}h/FP / {MAN_HOURS_PER_MONTH}h/月 × ¥{MAN_MONTH_RATE}/人月"
             f" × 类别[{cf_min}-{cf_max}] × 复用{rf:.3f} + ¥{direct_non_labor}"
@@ -94,7 +110,7 @@ def recommend_per_day_rate(category: str, reuse: str) -> Tuple[float, float]:
     rf = REUSE_FACTOR[reuse]
     floor = MAN_MONTH_RATE * cf_min * rf / WORKDAYS_PER_MONTH
     ceiling = MAN_MONTH_RATE * cf_max * rf / WORKDAYS_PER_MONTH
-    return round(floor), round(ceiling)
+    return int(xlround(floor, 0)), int(xlround(ceiling, 0))
 
 
 def check_per_day_rate(actual: float, category: str, reuse: str, tolerance: float = 0.10) -> Tri:
@@ -150,7 +166,7 @@ def compute_design_fee(amount_wan: float, project_type: str) -> float:
     if amount_wan <= 1000:
         base = amount_wan * 0.024
     elif amount_wan >= 10000:
-        return amount_wan * 0.015 * factor   # ≤1.5%
+        return xlround(amount_wan * 0.015 * factor, 2)   # ≤1.5%
     else:
         # 直线内插
         for (a1, b1), (a2, b2) in zip(DESIGN_FEE_TABLE, DESIGN_FEE_TABLE[1:]):
@@ -159,7 +175,7 @@ def compute_design_fee(amount_wan: float, project_type: str) -> float:
                 break
         else:  # pragma: no cover
             raise RuntimeError("interpolation gap")
-    return round(base * factor, 2)
+    return xlround(base * factor, 2)
 
 
 # ---- 软件运维 ---------------------------------------------------------------
@@ -173,5 +189,6 @@ def check_software_ops_per_man_year(yuan_per_man_year: float) -> Tri:
 
 
 # ---- Totals ----------------------------------------------------------------
-def compute_total(unit_price: float, qty: float) -> float:
-    return round(unit_price * qty)
+def compute_total(unit_price: float, qty: float) -> int:
+    """金额合计取整。返回 int —— 元为最小单位，且避免展示成 ¥3600.0。"""
+    return int(xlround(unit_price * qty, 0))
