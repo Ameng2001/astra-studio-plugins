@@ -116,6 +116,27 @@ class Verdict:
         return base
 
 
+#: 否定词 —— 紧邻关键词之前出现时，该次命中不算数。
+#: 「该视图为查看性质，**不修改**报告」会被误判为 EI（维护 ILF），
+#: 而按表10.5「执行外部查询时，不应维护内部逻辑文件」，它恰恰是 EQ。
+NEGATIONS = ("不", "无", "非", "未", "勿", "禁止", "无需", "不再", "不得")
+_NEG_WINDOW = 3
+
+
+def _hits(text: str, keywords: tuple[str, ...]) -> list[str]:
+    """命中关键词，跳过被否定的出现。"""
+    out = []
+    for k in keywords:
+        start = 0
+        while (idx := text.find(k, start)) != -1:
+            prefix = text[max(0, idx - _NEG_WINDOW):idx]
+            if not any(prefix.endswith(n) for n in NEGATIONS):
+                out.append(k)
+                break
+            start = idx + len(k)
+    return out
+
+
 def classify(text: str) -> Verdict:
     """按 RULES 优先级判定。返回首条命中规则的结论，并记录竞争规则。"""
     text = text or ""
@@ -123,7 +144,7 @@ def classify(text: str) -> Verdict:
     for rule in RULES:
         if any(b in text for b in rule.blockers):
             continue
-        hits = [k for k in rule.keywords if k in text]
+        hits = _hits(text, rule.keywords)
         if hits:
             matched.append((rule, hits))
 
@@ -141,8 +162,21 @@ def classify(text: str) -> Verdict:
         return Verdict(None, top_rule, top_hits, excluded=True)
 
     competing = [(r.verdict, h) for r, h in matched[1:]
-                 if r.verdict != top_rule.verdict and r.verdict != "EXCLUDE"]
+                 if r.verdict != top_rule.verdict and r.verdict != "EXCLUDE"
+                 and not _mutually_exclusive(top_rule.verdict, r.verdict)]
     return Verdict(top_rule.verdict, top_rule, top_hits, competing=competing)
+
+
+#: 互斥判别对 —— 命中两者不代表存在两个基本处理，而是同一判别标准的两端。
+#: EO/EQ：表9.3 p.20 与 表10.5 p.22 用「输出是否包含进一步数据处理产生的数据」
+#:        这一个判据区分二者，有派生即 EO，无派生即 EQ，不可能并存。
+#: ILF/ELF：表7.5 p.18「只有当一个逻辑文件不是应用程序的内部逻辑文件时，
+#:        它才会被计为一个外部逻辑文件」—— 同一文件二者只居其一。
+_EXCLUSIVE_PAIRS = frozenset({frozenset({"EO", "EQ"}), frozenset({"ILF", "ELF"})})
+
+
+def _mutually_exclusive(a: str, b: str) -> bool:
+    return frozenset({a, b}) in _EXCLUSIVE_PAIRS
 
 
 # ---- 结构性校验（表6.2 / 表7.1） --------------------------------------

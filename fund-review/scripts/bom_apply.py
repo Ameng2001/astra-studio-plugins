@@ -17,10 +17,11 @@ import argparse
 import json
 import re
 from collections import defaultdict
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from bom_schema import Bom, BomItem
+from bom_schema import Bom, BomItem, Nesma, Path_, Runtime
 from nesma_weights import ESTIMATED_WEIGHTS as W
 
 #: 成熟度保守序 —— 合并后取组内最不成熟者（该逻辑文件整体仍需建设）
@@ -108,7 +109,122 @@ def collapse_data_functions(bom: Bom, new_version: str) -> tuple[Bom, dict[str, 
                  "groups": len(log), "delta_ufp": delta, "detail": log}
 
 
-ADJUSTMENTS = {"A": collapse_data_functions}
+#: 子句切分 —— 只在分句标点处切。不按逗号/顿号切：
+#: 「新增、死亡及迁出数量」里的「新增」是统计口径不是动作，按逗号切会造出假功能点。
+CLAUSE_SPLIT = re.compile(r"[；;。\n]")
+MIN_CLAUSE_LEN = 4
+
+SPLIT_CITATION = "表8.6 p.19 / 表9.6 p.20"
+SPLIT_RULE = ("在输入屏幕或窗口上实现的（新增、更改或删除）不同功能计为不同的外部输入；"
+              "一个输出产品包含可被单独检索的不同逻辑布局时计为多个外部输出")
+
+
+def _lead_action(text: str) -> str | None:
+    """取子句中最先出现的动作词，用于给拆出的条目命名（如「病程记录-导出」）。"""
+    import nesma_classify as nc
+
+    hits = [(text.index(k), k) for rule in nc.RULES for k in rule.keywords if k in text]
+    return min(hits)[1] if hits else None
+
+
+def split_multi_process(bom: Bom, new_version: str) -> tuple[Bom, dict[str, Any]]:
+    """调整项 F：一行含多个基本处理的，按**子句实际文本**拆开。
+
+    只拆有文本证据的 —— 描述能按分句标点切出分属不同类型的子句。
+    同一子句内命中多类型的不自动拆：样本显示相当比例是名词短语误报
+    （「由我发起的流程」的「发起」、「本月度新增数量」的「新增」），
+    机械拆分会造出不存在的功能点。那些进人工裁决清单。
+    """
+    import nesma_classify as nc
+
+    # 每个 id 前缀的当前最大序号，用于分配新 id
+    max_seq: dict[str, int] = defaultdict(int)
+    for it in bom.items:
+        prefix, _, seq = it.id.rpartition(".")
+        if seq.isdigit():
+            max_seq[prefix] = max(max_seq[prefix], int(seq))
+
+    log: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    delta = 0
+    new_items: list[BomItem] = []
+
+    for it in list(bom.active()):
+        if not it.nesma:
+            continue
+        verdict = nc.classify(f"{it.name} {it.description}")
+        if not verdict.competing:
+            continue
+
+        clauses = [c.strip() for c in CLAUSE_SPLIT.split(it.description or "")
+                   if len(c.strip()) >= MIN_CLAUSE_LEN]
+        by_type: dict[str, list[str]] = defaultdict(list)
+        for c in clauses:
+            cv = nc.classify(c)
+            if cv.type:
+                by_type[cv.type].append(c)
+
+        if len(by_type) <= 1:
+            pending.append({
+                "id": it.id, "system": it.path.system, "name": it.name,
+                "imported_type": it.nesma.type,
+                "competing": [t for t, _ in verdict.competing],
+                "evidence": {t: h for t, h in verdict.competing},
+                "description": it.description,
+                "reason": "竞争类型在同一子句内，无文本依据可拆 —— 需人工判定是否真为多个基本处理",
+            })
+            continue
+
+        original_full = it.description
+        keep_type = it.nesma.type if it.nesma.type in by_type else verdict.type
+        prefix = it.id.rpartition(".")[0]
+
+        for ftype, texts in sorted(by_type.items()):
+            text = "；".join(texts) + "。"
+            if ftype == keep_type:
+                it.description = text
+                it.nesma.rationale = (
+                    f"判为 {ftype}：{SPLIT_RULE}（{SPLIT_CITATION}）。"
+                    f"本行原含 {len(by_type)} 个基本处理，已按子句拆分；"
+                    f"原描述：{original_full}"
+                )
+                it.nesma.counted_by = f"{it.nesma.counted_by or ''}; split:F@{new_version}"
+                continue
+            max_seq[prefix] += 1
+            new_id = f"{prefix}.{max_seq[prefix]:04d}"
+            # 拆出的条目必须自带主语 —— 「支持导出。」脱离原行无法判定导出什么，
+            # 既撑不住评审也会直接踩 G-05（描述不可判定）。
+            action = _lead_action(text) or ftype
+            new_items.append(BomItem(
+                id=new_id, cls=it.cls, name=f"{it.name}-{action}",
+                path=Path_(**{k: v for k, v in asdict(it.path).items()}),
+                description=f"{it.name}：{text}",
+                nesma=Nesma(type=ftype,
+                            rationale=(f"判为 {ftype}：{SPLIT_RULE}（{SPLIT_CITATION}）。"
+                                       f"自 {it.id} 拆出 —— 该行原含 {len(by_type)} 个基本处理；"
+                                       f"原描述：{original_full}"),
+                            counted_by=f"split:F@{new_version} from {it.id}"),
+                app_type=it.app_type, dev_category=it.dev_category,
+                maturity=it.maturity, maturity_evidence=it.maturity_evidence,
+                runtime=Runtime(**asdict(it.runtime)),
+                since=new_version, status="draft", source=it.source,
+                tags=list(it.tags),
+            ))
+            delta += W[ftype]
+
+        log.append({"source": it.id, "system": it.path.system,
+                    "types": sorted(by_type), "kept": keep_type,
+                    "added": [n.id for n in new_items if n.id.startswith(prefix)][-len(by_type) + 1:],
+                    "delta_ufp": sum(W[t] for t in by_type if t != keep_type)})
+
+    bom.items.extend(new_items)
+    bom.version = new_version
+    return bom, {"adjustment": "F", "citation": SPLIT_CITATION,
+                 "split": len(log), "added_items": len(new_items),
+                 "delta_ufp": delta, "detail": log, "pending_adjudication": pending}
+
+
+ADJUSTMENTS = {"A": collapse_data_functions, "F": split_multi_process}
 
 
 def main() -> None:
@@ -131,8 +247,16 @@ def main() -> None:
     report["ufp_before"], report["ufp_after"] = before, after
     report["active_before"], report["active_after"] = before_n, after_n
 
-    print(f"调整项 {args.adjustment} — {report['groups']} 组折叠")
-    print(f"  有效条目 {before_n} → {after_n}（废弃 {before_n - after_n} 条，未物理删除）")
+    if "groups" in report:
+        print(f"调整项 {args.adjustment} — {report['groups']} 组折叠")
+        print(f"  有效条目 {before_n} → {after_n}"
+              f"（废弃 {before_n - after_n} 条，未物理删除）")
+    else:
+        print(f"调整项 {args.adjustment} — {report['split']} 条拆分，"
+              f"新增 {report['added_items']} 条")
+        print(f"  有效条目 {before_n} → {after_n}")
+        print(f"  待人工裁决 {len(report['pending_adjudication'])} 条"
+              f"（竞争类型在同一子句内，无文本依据可拆）")
     print(f"  UFP {before} → {after}（{report['delta_ufp']:+d}）")
 
     if args.dry_run:
