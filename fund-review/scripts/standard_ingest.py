@@ -122,6 +122,64 @@ def replay_workbook(pack: StandardPack, workbook: Path) -> dict[str, Any]:
             "all_ok": all(x["ok"] for x in rows)}
 
 
+def compare_regions(bom_dir: Path, packs: list[Path], modes: Path | None,
+                    delivery_plan: Path | None) -> dict[str, Any]:
+    """同一 BOM 跨区域对比 —— 验证「换省只改一层，BOM 零改动」。
+
+    差异必须能逐因子解释。解释不了的残差说明有环节没搞清楚，
+    那比差异本身更危险。
+    """
+    import yaml
+
+    from bom_schema import Bom
+    from costing_engine import CostingEngine, DealConfig, DeliveryContext
+
+    bom = Bom.load(bom_dir)
+    deal = DealConfig(deal_id="compare")
+    ctx = None
+    if modes and delivery_plan:
+        from delivery_matrix import DeliveryPlan
+
+        modes_doc = yaml.safe_load(modes.read_text(encoding="utf-8"))
+        base, _ = CostingEngine(bom, StandardPack.load(packs[0]), deal).in_scope()
+        dp = DeliveryPlan.load(modes, delivery_plan)
+        ctx = DeliveryContext(dp.assign(base), modes_doc["modes"], {})
+
+    out = []
+    for pk in packs:
+        pack = StandardPack.load(pk)
+        r = CostingEngine(bom, pack, deal, ctx).run()
+        sw = r["software_dev"]
+        wrate = (sum(s["effort_man_months"] * s["man_month_rate"]
+                     for s in sw["systems"]) / sw["effort_total"]
+                 if sw["effort_total"] else 0)
+        out.append({"pack": pack, "ufp": sw["ufp_total"], "total": sw["total"],
+                    "wrate": wrate})
+
+    a, b = out
+    sz_a = a["pack"].factor("size_change", deal.counting_method)
+    sz_b = b["pack"].factor("size_change", deal.counting_method)
+    factors = [
+        {"name": "规模变更因子", "ratio": sz_b / sz_a},
+        {"name": "软件开发生产率",
+         "ratio": (b["pack"].rate("productivity_hours_per_fp")
+                   / a["pack"].rate("productivity_hours_per_fp"))},
+        {"name": "人月费率（加权）",
+         "ratio": b["wrate"] / a["wrate"] if a["wrate"] else 1.0},
+    ]
+    predicted = 1.0
+    for f in factors:
+        predicted *= f["ratio"]
+    actual = b["total"] / a["total"] if a["total"] else 0
+    return {
+        "packs": [a["pack"].pack_id, b["pack"].pack_id],
+        "ufp": [a["ufp"], b["ufp"]], "ufp_equal": a["ufp"] == b["ufp"],
+        "totals": [a["total"], b["total"]],
+        "factors": factors, "predicted": predicted, "actual": actual,
+        "residual_pct": (actual / predicted - 1) * 100 if predicted else 0,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="标准 PDF 解析与标准包校验")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -134,6 +192,12 @@ def main() -> None:
     p2.add_argument("--pack", required=True, type=Path)
     p2.add_argument("--verify-citations", action="store_true")
 
+    p4 = sub.add_parser("compare", help="同一 BOM 跨区域对比，逐因子分解差异")
+    p4.add_argument("--packs", required=True, nargs=2, type=Path)
+    p4.add_argument("--bom", required=True, type=Path)
+    p4.add_argument("--modes", type=Path)
+    p4.add_argument("--delivery-plan", type=Path)
+
     p3 = sub.add_parser("replay")
     p3.add_argument("--pack", required=True, type=Path)
     p3.add_argument("--workbook", required=True, type=Path)
@@ -144,6 +208,20 @@ def main() -> None:
         r = parse(args.pdf, args.out)
         print(f"解析完成：{r['page_count']} 页，{len(r['headings'])} 个标题锚点")
         return
+
+    if args.cmd == "compare":
+        r = compare_regions(args.bom, args.packs, args.modes, args.delivery_plan)
+        print(f"UFP 两地{'一致' if r['ufp_equal'] else '不一致'}："
+              f"{r['ufp'][0]} vs {r['ufp'][1]}"
+              f"{' ✓（BOM 未改动）' if r['ufp_equal'] else ' ✗'}")
+        print(f"{'因子':<30}{'比值':>10}{'影响':>10}")
+        for f in r["factors"]:
+            print(f"{f['name']:<32}{f['ratio']:>10.5f}{(f['ratio'] - 1) * 100:>9.2f}%")
+        print(f"{'三因子连乘（预测）':<32}{r['predicted']:>10.5f}"
+              f"{(r['predicted'] - 1) * 100:>9.2f}%")
+        print(f"{'实际比值':<32}{r['actual']:>10.5f}{(r['actual'] - 1) * 100:>9.2f}%")
+        print(f"残差 {r['residual_pct']:+.4f}% ← 两条链路取整点不同所致")
+        sys.exit(0 if abs(r["residual_pct"]) < 0.5 and r["ufp_equal"] else 1)
 
     try:
         pack = StandardPack.load(args.pack)

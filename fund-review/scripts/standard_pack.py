@@ -116,12 +116,35 @@ class StandardPack:
         return self.value(f"rates.{name}")[0]
 
     def factor(self, group: str, key: str) -> float:
-        values, _ = self.value(f"factors.{group}.values")
-        if key not in values:
+        """取调整因子，经 aliases 解析 BOM 词表 → 本区域词表。
+
+        各地的分类词表并不一致 —— 山东「应用类型」7 类，广东「软件类别」4 类，
+        同一概念山东叫「智能信息」、广东叫「人工智能」。BOM 存的是规范词表，
+        由各标准包用 aliases 映射到自己的词表。**这是「换省 BOM 零改动」
+        得以成立的机制**；没有它，那个说法就是假的。
+
+        无对应取值时**直接报错，不静默兜底** —— 广东没有「基础软件、支撑软件」
+        这一类，静默取 1.0 会让报价少算而没人发现。
+        """
+        node = self.data.get("factors", {}).get(group, {})
+        values = node.get("values", {})
+        resolved = node.get("aliases", {}).get(key, key)
+        if resolved not in values:
+            unmapped = node.get("unmapped", [])
+            hint = ""
+            if key in unmapped:
+                hint = (f"　「{key}」在本标准中无对应类别（{node.get('unmapped_note', '')}"
+                        .strip().splitlines()[0] + "）。需业务侧显式裁定归入哪一类")
             raise PackError(
-                f"{self.pack_id}: factors.{group} 无取值 {key!r}；"
-                f"可选：{sorted(values)}")
-        return values[key]
+                f"{self.pack_id}: factors.{group} 无取值 {key!r}"
+                f"{f'（别名解析为 {resolved!r}）' if resolved != key else ''}；"
+                f"可选：{sorted(values)}{hint}")
+        return values[resolved]
+
+    def factor_label(self, group: str, key: str) -> str:
+        """本区域标准中该分类的实际名称 —— 编制说明要用标准自己的词。"""
+        node = self.data.get("factors", {}).get(group, {})
+        return node.get("aliases", {}).get(key, key)
 
     def fp_weight(self, method: str, ftype: str) -> int:
         weights, _ = self.value(f"fp_counting.{method}.weights")
