@@ -61,6 +61,19 @@ class DealConfig:
 
 
 @dataclass
+class DeliveryContext:
+    """交付方案上下文 —— 建设期算什么，取决于每个条目怎么交付。
+
+    SaaS 下不该有定制开发费（你订阅就不用建），私有化下不该有订阅费。
+    不接交付方案就三个场景算出同一个建设期总额，TCO 对比毫无意义。
+    """
+
+    assigned: dict[str, str]              # 条目 id → 形态代码
+    modes: dict[str, Any]                 # 形态定义
+    internal: dict[str, Any] = field(default_factory=dict)   # 实施投入等
+
+
+@dataclass
 class SystemCost:
     system: str
     dev_category: str
@@ -74,11 +87,26 @@ class SystemCost:
 
 
 class CostingEngine:
-    def __init__(self, bom: Bom, pack: StandardPack, deal: DealConfig) -> None:
+    def __init__(self, bom: Bom, pack: StandardPack, deal: DealConfig,
+                 delivery: "DeliveryContext | None" = None) -> None:
         self.bom = bom
         self.pack = pack
         self.deal = deal
+        self.delivery = delivery
         self.profile = get_profile(pack.formula_profile)
+
+    def _construction_elements(self, item: BomItem) -> set[str] | None:
+        """该条目在其交付形态下，建设期出现哪些成本元素。
+
+        无交付方案时返回 None，表示按「全部定制开发」计 —— 这是 P4 的行为，
+        保留以兼容尚未指定交付方式的快速估算。
+        """
+        if self.delivery is None:
+            return None
+        mode = self.delivery.assigned.get(item.id)
+        if mode is None:
+            return set()
+        return set(self.delivery.modes.get(mode, {}).get("construction", []))
 
     # ---- 范围 ----
 
@@ -109,6 +137,9 @@ class CostingEngine:
         for i in items:
             if i.cls not in FP_COUNTED_CLASSES or not i.nesma:
                 continue
+            ce = self._construction_elements(i)
+            if ce is not None and "CE-DEV" not in ce:
+                continue          # 订阅/买断形态不走功能点法
             groups[(i.path.system, i.dev_category or "基于统一平台的软件开发")].append(i)
 
         out: list[SystemCost] = []
@@ -141,6 +172,9 @@ class CostingEngine:
         for i in items:
             if i.cls != "HARDWARE":
                 continue
+            ce = self._construction_elements(i)
+            if ce is not None and "CE-HW" not in ce:
+                continue
             price = i.spec.get("reference_unit_price_yuan")
             qty = i.spec.get("qty") or 0
             amount = (price or 0) * qty
@@ -159,6 +193,58 @@ class CostingEngine:
                     f"单价 ≥{ev.get('unit_price_threshold')} 元或单一类型总价 "
                     f"≥{ev.get('category_total_threshold')} 元需 "
                     f"{ev.get('quotes_required')} 家盖章询价单")}
+
+    # ---- 实施集成 ----
+
+    def implementation(self) -> dict[str, Any]:
+        """CE-IMPL —— 各交付形态的建设期实施投入。
+
+        SaaS 形态的建设期几乎只有这一项：不用建，但要接入配置。
+        走 CE-DEV 的形态其实施投入含在系统集成费里，此处不重复计。
+        """
+        if self.delivery is None:
+            return {"rows": [], "total": 0.0}
+        impl = self.delivery.internal.get("implementation", {})
+        rows, total = [], 0.0
+        for mode in sorted(set(self.delivery.assigned.values())):
+            spec = self.delivery.modes.get(mode, {})
+            if "CE-IMPL" not in spec.get("construction", []):
+                continue
+            if "CE-DEV" in spec.get("construction", []):
+                continue          # 实施含在系统集成费，不重复计
+            cfg = impl.get(mode, {})
+            amount = float(cfg.get("amount", 0))
+            if not amount:
+                continue
+            total += amount
+            rows.append({"mode": mode, "mode_name": spec.get("name", mode),
+                         "amount": amount,
+                         "basis": (f"{cfg.get('man_days')} 人天 × "
+                                   f"¥{cfg.get('rate_per_day')}/人天"
+                                   if cfg.get("man_days") else cfg.get("basis", "")),
+                         "note": cfg.get("note", "")})
+        return {"rows": rows, "total": xlround(total, 2)}
+
+    # ---- 待核价项 ----
+
+    def pending_pricing(self, items: list[BomItem]) -> list[dict[str, Any]]:
+        """走 CE-LIC 但 BOM 中无许可价的条目 —— 显式列为待核价，不静默计 0。"""
+        if self.delivery is None:
+            return []
+        out = []
+        seen = set()
+        for i in items:
+            ce = self._construction_elements(i) or set()
+            if "CE-LIC" not in ce:
+                continue
+            key = (i.path.system, self.delivery.assigned.get(i.id))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"system": i.path.system, "mode": self.delivery.assigned.get(i.id),
+                        "element": "CE-LIC",
+                        "note": "许可/买断价格待商务核价，本次未计入金额"})
+        return out
 
     # ---- 其他建设费用 ----
 
@@ -201,6 +287,8 @@ class CostingEngine:
         items, excluded = self.in_scope()
         sys_costs = self.software_dev(items)
         hw = self.hardware(items)
+        impl = self.implementation()
+        pending = self.pending_pricing(items)
 
         sw_total = xlround(sum(s.cost for s in sys_costs), 2)
         dev_cats = {s.dev_category for s in sys_costs}
@@ -224,12 +312,18 @@ class CostingEngine:
                 "total": sw_total,
             },
             "hardware": hw,
+            "implementation": impl,
+            "pending_pricing": pending,
             "other_fees": fees,
+            "delivery": ({"modes_used": sorted(set(self.delivery.assigned.values()))}
+                         if self.delivery else None),
             "totals": {
                 "software_dev": sw_total,
                 "hardware_purchase": hw["total"],
+                "implementation": impl["total"],
                 "other_fees": fee_total,
-                "construction_total": xlround(sw_total + hw["total"] + fee_total, 2),
+                "construction_total": xlround(
+                    sw_total + hw["total"] + impl["total"] + fee_total, 2),
             },
         }
 

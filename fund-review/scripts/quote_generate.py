@@ -28,7 +28,10 @@ import openpyxl
 
 import excel_styler
 from bom_schema import FP_COUNTED_CLASSES, Bom
-from costing_engine import PLACEHOLDER_TAG, CostingEngine, DealConfig, lock, snapshot
+from costing_engine import (PLACEHOLDER_TAG, CostingEngine, DealConfig,
+                            DeliveryContext, lock, snapshot)
+from delivery_matrix import DeliveryPlan
+from ops_model import OpsModel, tco
 from standard_pack import StandardPack
 
 
@@ -240,6 +243,71 @@ def emit_notes(bom: Bom, result: dict[str, Any], pack: StandardPack,
     path.write_text("\n".join(L), encoding="utf-8")
 
 
+def emit_ops_list(ops_lines, violations, path: Path) -> None:
+    """03 运营期费用清单 —— 每行带 payee 与是否计入本次采购。
+
+    in_scope=false 的行**必须列出但不计入**：漏列会被财评认为方案不完整
+    （"运维怎么办"答不上来）；计入则超出本标准科目范围会被划掉。
+    列而不计并说明另行立项，才是正确做法。
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "运营期费用清单"
+    ws.append(["运营期费用清单"])
+    ws.append(["in_scope=是 的行计入本次采购预算；=否 的行须另行立项或由客户直付，"
+               "此处列出以保证方案完整"])
+    ws.append([])
+    ws.append(["成本元素", "名称", "范围", "交付形态", "年度金额（元）",
+               "付款对象", "计入本次采购", "测算依据", "说明"])
+    for l in ops_lines:
+        ws.append([l.element, l.element_name, l.scope, l.mode, l.annual_yuan,
+                   l.payee, "是" if l.in_scope else "否", l.basis, l.note])
+    ws.append([])
+    ws.append(["合计（全部）", "", "", "",
+               sum(l.annual_yuan for l in ops_lines), "", "", "", ""])
+    ws.append(["其中计入本次采购", "", "", "",
+               sum(l.annual_yuan for l in ops_lines if l.in_scope), "", "", "", ""])
+
+    if violations:
+        vs = wb.create_sheet("一致性检查")
+        vs.append(["规则", "级别", "说明"])
+        for v in violations:
+            vs.append([v.rule, v.severity, v.message])
+    wb.save(path)
+    excel_styler.style_workbook(path)
+
+
+def emit_tco(comparisons: list[dict], path: Path) -> None:
+    """04 TCO 对比 —— 对客户最有说服力的一张表。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "TCO对比"
+    ws.append(["交付方式 TCO 对比"])
+    ws.append(["建设期为一次性投入；运营期按年计，5 年累计"])
+    ws.append([])
+    payees = sorted({p for c in comparisons for p in c["tco5"]["annual_by_payee"]})
+    ws.append(["方案", "说明", "建设期（元）", "年度经常性（元）",
+               *[f"　其中付{p}" for p in payees], "3年TCO（元）", "5年TCO（元）"])
+    for c in comparisons:
+        t3, t5 = c["tco3"], c["tco5"]
+        ws.append([c["name"], c["description"], t5["construction"], t5["annual_total"],
+                   *[t5["annual_by_payee"].get(p, 0) for p in payees],
+                   t3["tco"], t5["tco"]])
+    ws.append([])
+    best = min(comparisons, key=lambda c: c["tco5"]["tco"])
+    ws.append([f"5 年 TCO 最低：{best['name']}（¥{best['tco5']['tco']:,.2f}）"])
+
+    gaps = [g for c in comparisons for g in c.get("gaps", [])]
+    if gaps:
+        gs = wb.create_sheet("待核价与缺口")
+        gs.append(["方案", "类型", "说明"])
+        for c in comparisons:
+            for g in c.get("gaps", []):
+                gs.append([c["name"], g["kind"], g["note"]])
+    wb.save(path)
+    excel_styler.style_workbook(path)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="生成报价输出物")
     ap.add_argument("--bom", required=True, type=Path)
@@ -250,6 +318,12 @@ def main() -> None:
     ap.add_argument("--include-placeholders", action="store_true")
     ap.add_argument("--project-type", default="新建")
     ap.add_argument("--reuse-level", default="新建")
+    ap.add_argument("--modes", type=Path, help="delivery-modes/modes.yaml")
+    ap.add_argument("--internal-cost", type=Path,
+                    help="delivery-modes/internal-cost-model.yaml（敏感，仅本地）")
+    ap.add_argument("--delivery-plan", type=Path, help="本商机采用的交付方案")
+    ap.add_argument("--scenarios", type=Path, nargs="*", default=[],
+                    help="用于 TCO 对比的场景预设")
     args = ap.parse_args()
 
     bom = Bom.load(args.bom)
@@ -259,7 +333,19 @@ def main() -> None:
                       include_placeholders=args.include_placeholders,
                       as_of_bom_version=args.as_of)
 
-    result = CostingEngine(bom, pack, deal).run()
+    delivery = None
+    dplan = None
+    if args.delivery_plan and args.modes:
+        import yaml as _yaml
+        modes_doc = _yaml.safe_load(args.modes.read_text(encoding="utf-8"))
+        internal = (_yaml.safe_load(args.internal_cost.read_text(encoding="utf-8"))
+                    if args.internal_cost else {})
+        base_items, _ = CostingEngine(bom, pack, deal).in_scope()
+        dplan = DeliveryPlan.load(args.modes, args.delivery_plan)
+        delivery = DeliveryContext(assigned=dplan.assign(base_items),
+                                   modes=modes_doc["modes"], internal=internal)
+
+    result = CostingEngine(bom, pack, deal, delivery).run()
     out = args.out / "out"
     out.mkdir(parents=True, exist_ok=True)
 
@@ -271,6 +357,42 @@ def main() -> None:
         encoding="utf-8")
     (out / "costing-result.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if delivery is not None:
+        base_items, _ = CostingEngine(bom, pack, deal).in_scope()
+        om = OpsModel.load(args.modes, args.internal_cost)
+        ops = om.expand(base_items, delivery.assigned)
+        violations = dplan.check(base_items, delivery.assigned, pack)
+        emit_ops_list(ops, violations, out / "03-运营期费用清单.xlsx")
+
+        comparisons = []
+        for sp in args.scenarios:
+            import yaml as _yaml
+            doc = _yaml.safe_load(Path(sp).read_text(encoding="utf-8"))
+            p2 = DeliveryPlan.load(args.modes, sp)
+            a2 = p2.assign(base_items)
+            dc2 = DeliveryContext(a2, delivery.modes, delivery.internal)
+            r2 = CostingEngine(bom, pack, deal, dc2).run()
+            ops2 = om.expand(base_items, a2)
+            cons2 = r2["totals"]["construction_total"]
+            gaps = [{"kind": "待核价", "note": f"{g['system']} 的 {g['element']}：{g['note']}"}
+                    for g in r2["pending_pricing"]]
+            gaps += [{"kind": f"一致性-{v.rule}", "note": v.message}
+                     for v in p2.check(base_items, a2, pack) if v.severity == "fail"]
+            comparisons.append({
+                "name": doc.get("name", Path(sp).stem),
+                "description": doc.get("description", ""),
+                "tco3": tco(cons2, ops2, 3), "tco5": tco(cons2, ops2, 5),
+                "gaps": gaps})
+        if comparisons:
+            emit_tco(comparisons, out / "04-TCO对比.xlsx")
+            (out / "tco-comparison.json").write_text(
+                json.dumps(comparisons, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        margins = [m for m in om.margin_check() if m["below_threshold"]]
+        for m in margins:
+            print(f"  ⚠ 订阅毛利预警：{m['kind']} 毛利 {m['margin']:.1%} "
+                  f"低于阈值 {m['threshold']:.0%}（内部信息，未写入对外文档）")
 
     t = result["totals"]
     print(f"BOM {result['bom_version']} × {pack.pack_id} × {deal.project_type}项目")
