@@ -1,11 +1,21 @@
 ---
 name: bom-sync-lark
-description: '把造价 BOM 推送到飞书多维表格供业务侧共创评审，并把裁决结果拉回生成 diff 报告。用于 ILF 实体核对、占位确认、类型裁决等需要人在环判断的环节。触发词："同步BOM到飞书", "推送共创表", "拉取飞书裁决", "/fund-review:bom-sync-lark"。'
+description: '把造价 BOM 推送到飞书多维表格供业务侧共创评审，并把裁决结果拉回生成 diff 报告。两条通道：功能点计算书（方案人员按子系统分表直接编辑）与裁决表（ILF 实体核对、占位确认、类型裁决等人在环判断）。触发词："同步BOM到飞书", "推送共创表", "推送计算书", "拉取飞书裁决", "/fund-review:bom-sync-lark"。'
 allowed-tools: Read, Write, Bash, Glob
 user-invocable: true
 ---
 
 # bom-sync-lark
+
+飞书上有**两条互不干扰的通道**，服务两拨人：
+
+| 通道 | 脚本 | 配置 | 给谁用 |
+|---|---|---|---|
+| **功能点计算书** | `lark_worksheet.py` | `lark-worksheet.json` | 方案人员按子系统直接编辑功能点清单 |
+| **裁决表** | `lark_bom_sync.py` | `lark-sync.json` | 评审人处理占位、实体核对、类型裁决 |
+
+计算书是主线 —— 它的形态对齐财评《功能点计算书》，方案人员打开就能改。
+裁决表是质检的人在环补充，不要拿它当共创入口。
 
 **git 是发布层，飞书是评审层。** 两个方向语义不对称，不要当成普通双向同步。
 
@@ -25,7 +35,50 @@ user-invocable: true
 > `+title-resolve` 需要 `search:docs:read` scope。缺失时无法按标题查重，
 > 此时不要盲目新建 —— 先向用户确认目标 Base 是否已存在。
 
-## 表结构
+## 通道一：功能点计算书
+
+一个 Base，**一张 `0 参数表` + 每个子系统一张表**。不做成单张大表，也不拆成
+多个 Base：单表 1700+ 行方案人员翻不动；拆 Base 会让"全项目多少 UFP"变成
+跨文件手工汇总，而那恰恰是最容易出错的地方。
+
+列顺序对齐财评计算书：`子系统 → 一~四级模块 → 功能点计数项 → 类别 →
+UFP → 重用程度 → 修改类型 → US → 备注`。
+
+**UFP 与 US 是公式列，不是数据列。** 它们跨表引用 `0 参数表`：
+
+```
+UFP = SUM([0 参数表].FILTER(AND(参数类别="功能点权重", 参数名=[类别])).[取值])
+US  = UFP × 重用系数 × 修改类型系数        （同样查参数表）
+```
+
+好处是权重口径只有一处可改：改 `0 参数表` 里 EO=5，15 张表一起变
+（飞书公式重算是**异步的，有数秒延迟**，刚改完立刻回读可能拿到旧值，
+不要据此判断联动失效）。坏处是 push 不能写 UFP/US —— 写了会被公式覆盖，
+脚本只写数据列。
+
+配置 `lark-worksheet.json`：
+
+```json
+{ "base_token": "...", "param_table": "tbl...",
+  "tables": { "<BOM 里的 system 名>": "tbl...", ... },
+  "table_names": { "<system 名>": "1.1 平台能力", ... } }
+```
+
+`tables` 的键必须是 BOM `path.system` 的原值，`table_names` 是飞书上的短表名
+（表名有长度限制，写全称会被截断）。
+
+```bash
+PYTHONPATH=$PLUG python3 $PLUG/lark_worksheet.py push --bom bom --config bom/lark-worksheet.json
+PYTHONPATH=$PLUG python3 $PLUG/lark_worksheet.py pull --bom bom --config bom/lark-worksheet.json --out bom/lark-worksheet-pull
+```
+
+push 只覆盖子系统表，**不动 `0 参数表`** —— 那是人维护的。
+pull 逐表读回，用表名反查 `子系统` 补齐（飞书上这列可以留空）。
+
+只有 `FP_COUNTED_CLASSES` 且带 `nesma` 的条目进计算书。HARDWARE 等类别不在
+表里是设计如此，pull 比对时按同一集合过滤，否则会报一片假的"疑删除"。
+
+## 通道二：裁决表
 
 | 表 | 内容 | 谁填 |
 |---|---|---|
@@ -37,7 +90,7 @@ user-invocable: true
 
 每张裁决表都有一个 `★待…` 视图，筛掉已处理项，业务侧直接从视图开工。
 
-## 用法
+### 用法
 
 ```bash
 PLUG=<plugin>/scripts
@@ -49,15 +102,29 @@ PYTHONPATH=$PLUG python3 $PLUG/lark_bom_sync.py pull --bom bom --config bom/lark
 +table-create / +record-batch-create / +view-create / +view-set-filter`，
 完成后把返回的 token 与各 id 写进 `lark-sync.json`。脚本负责此后的例行同步。
 
-## lark-cli 的三个坑
+## lark-cli 的坑
 
-踩过并已在脚本中处理，改动脚本时不要退回去：
+全部踩过并已在两个脚本中处理。改动脚本时不要退回去：
 
-1. **默认输出是 markdown，不是 JSON** —— 所有调用必须显式加 `--json`
-2. **`+record-list` 返回位置数组** —— `data.data` 是每行一个数组，列顺序由
+1. **指定输出格式用 `--format json`，不是 `--json`** —— `--json` 在
+   `+record-batch-create` / `+record-delete` 上是**载荷参数**。两者混用会拼成
+   `--json <载荷> --json`，末尾那个没有参数，直接报 `flag needs an argument`
+2. **`+record-delete` 的载荷是 `--json {"record_id_list":[...]}`**，没有
+   `--record-id` 这个形式
+3. **清空必须反复取页直到表空** —— 单次 `+record-list` 只回一页（200 条）。
+   取一页删完就退出，会留下剩余旧记录与新数据叠加。实测 1764 条只删了 200，
+   push 后表里 3327 行。**它不报错，只是静默留下一半旧数据** —— 用
+   `push` 后行数是否等于 BOM 条数来对账
+4. **`+record-list` 返回位置数组** —— `data.data` 是每行一个数组，列顺序由
    `data.fields` 给出，不是字段名→值的字典。必须 zip 成字典再按名取值
-3. **没有 `total` 字段** —— 分页靠 `has_more` 判断；批量写入的返回
+5. **没有 `total` 字段** —— 分页靠 `has_more` 判断；批量写入的返回
    `record_id_list` 长度是精确的写入条数，用它对账
+6. **`--json @file` 只吃相对于 cwd 的相对路径；`--fields` 完全不接受 `@file`**，
+   必须内联
+7. **建资源的命令会在 JSON 前先打一行散文** —— `+create-folder`、`+table-create`
+   都是。解析崩了**不代表操作失败**。永远先看 `ok`，再用 `+table-list` /
+   `+folder-list` 回查 id，不要靠猜返回结构的键名。当初就是解析崩了以为失败、
+   重跑一遍，建出了两份文件夹和两个 Base
 
 ## 冲突策略
 
@@ -67,6 +134,8 @@ PYTHONPATH=$PLUG python3 $PLUG/lark_bom_sync.py pull --bom bom --config bom/lark
 
 ## 注意
 
-- push 会**先清空再重写**主表。增量合并对只读快照没有意义，且容易留下幽灵行
+- push 会**先清空再重写**。增量合并对只读快照没有意义，且容易留下幽灵行
 - 批量写入单次上限 200 条，脚本已分批；连续写同一表要串行
 - `select` 字段只能写入字段中已存在的选项，新增取值要先改字段
+- 计算书 push 一轮 15 张表要两分钟量级（每表一清一写、逐页删）。别设短超时，
+  中途掐断会留下清空了但没写回的表

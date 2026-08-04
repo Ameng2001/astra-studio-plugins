@@ -8,7 +8,12 @@
     子系统 → 一~四级模块 → 功能点计数项名称 → 功能描述
     → 类别 → UFP(自动) → 重用程度 → 修改类型 → US(自动) → 备注 → 条目ID
 
-两个自动计算列由飞书公式字段实现，方案人员改「类别」UFP 就跟着变。
+**一个 Base、每个子系统一张表**，外加一张「0 参数表」存权重与系数。
+UFP/US 是跨表引用参数表的公式字段 —— 改系数只改参数表一处，15 张表联动。
+
+为什么不拆成 15 个 Base：拆文件后「本项目一共多少 UFP」要跨文件手工汇总，
+而那正是最容易出错的地方（P0 那 ¥421.6 万就是汇总出的错）。
+单 Base 多表保住了汇总能力，飞书高级权限仍可把角色限定到具体表。
 
 **方向仍不对称**：push 覆盖，pull 只出 diff 报告不改 BOM。
 飞书上的一次误编辑不应该直接改变报价基线。
@@ -80,9 +85,29 @@ def _row(it: BomItem) -> dict[str, Any]:
 
 
 def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
+    """按子系统分表覆盖写入。参数表不动 —— 它是人维护的。"""
     bt = cfg["base_token"]
-    tid = next(iter(cfg["table"].values()))
+    by_system: dict[str, list[BomItem]] = defaultdict(list)
+    for i in bom.active():
+        if i.cls in FP_COUNTED_CLASSES and i.nesma:
+            by_system[i.path.system].append(i)
 
+    total, detail = 0, {}
+    for system, items in sorted(by_system.items()):
+        tid = cfg["tables"].get(system)
+        if not tid:
+            detail[system] = "⚠️ 配置中无对应表，跳过"
+            continue
+        n = _push_table(bt, tid, [_row(i) for i in items])
+        if isinstance(n, dict):
+            return {"ok": False, "written": total, "error": n}
+        total += n
+        detail[system] = n
+    return {"ok": True, "written": total, "detail": detail,
+            "bom_version": bom.version}
+
+
+def _push_table(bt: str, tid: str, rows: list[dict[str, Any]]):
     # 清空必须**反复取页直到表空** —— 只取一页 id 删完就退出，
     # 会留下剩余记录与新数据叠加（实测 1764 条只删了 200）
     while True:
@@ -95,10 +120,8 @@ def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
                  "--as", "user", "--yes",
                  "--json", json.dumps({"record_id_list": ids}))
         if not d.get("ok"):
-            return {"ok": False, "written": 0, "error": d.get("error")}
+            return d.get("error")
 
-    rows = [_row(i) for i in bom.active()
-            if i.cls in FP_COUNTED_CLASSES and i.nesma]
     written = 0
     for s in range(0, len(rows), BATCH):
         r = lark("base", "+record-batch-create", "--base-token", bt,
@@ -106,9 +129,9 @@ def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
                  "--json", json.dumps({"create_records": rows[s:s + BATCH]},
                                       ensure_ascii=False))
         if not r.get("ok"):
-            return {"ok": False, "written": written, "error": r.get("error")}
+            return r.get("error")
         written += len(r["data"].get("record_id_list", []))
-    return {"ok": True, "written": written, "bom_version": bom.version}
+    return written
 
 
 # ---- pull --------------------------------------------------------------
@@ -163,8 +186,11 @@ def _next_id(bom: Bom, system: str, used: set[str]) -> str:
 
 def pull(bom: Bom, cfg: dict[str, Any], out: Path) -> dict[str, Any]:
     bt = cfg["base_token"]
-    tid = next(iter(cfg["table"].values()))
-    rows = fetch(bt, tid)
+    rows: list[dict[str, str]] = []
+    for system, tid in sorted(cfg["tables"].items()):
+        for r in fetch(bt, tid):
+            r.setdefault("子系统", system)
+            rows.append(r)
     # 只与「计算书写入范围」比对 —— 硬件等非功能点条目本就不在表里，
     # 拿它们比会把 30 个硬件误报成「疑删除」
     by_id = {i.id: i for i in bom.active()
