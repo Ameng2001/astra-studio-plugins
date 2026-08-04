@@ -1,7 +1,7 @@
 {
   "name": "fund-review",
-  "version": "0.5.1",
-  "description": "Quote optimization + financial review pre-audit plugin for government IT procurement. Generates standards-aligned optimization suggestions, rewrites quote spreadsheets per approved plan, and produces scored review reports with traceable citations to the local budget standard.",
+  "version": "0.6.0",
+  "description": "Quote generation + optimization + financial review pre-audit for government IT procurement. Builds a region-neutral BOM (function-point single source of truth) from spreadsheets, enforces NESMA counting quality gates, generates standards-aligned optimization suggestions, rewrites quote spreadsheets per approved plan, and produces scored review reports with traceable citations to the local budget standard.",
   "author": {
     "name": "junchang.w@gmail.com"
   },
@@ -9,10 +9,16 @@
     "fund-review",
     "quote-optimize",
     "budget-standard",
+    "bom",
+    "nesma",
+    "function-point",
     "财评",
     "报价优化",
+    "功能点法",
     "柳州",
-    "幼教"
+    "山东",
+    "幼教",
+    "康养"
   ],
   "skills": "./skills/",
   "commands": "./commands/"

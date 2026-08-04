@@ -1,0 +1,363 @@
+"""nesma_rules — BOM 质量门禁 G-01..G-10。
+
+设计要点：门禁不是"通过/不通过"两态，而是**按目标状态分级**。
+一条 draft 条目允许没有 rationale；但它想升到 reviewed 就必须补上。
+每条发现因此带 `blocks`（阻断晋升到哪个状态），报告据此回答
+"当前版本能升到哪一级、还差什么"，而不是笼统地报一堆红字。
+
+依赖：仅标准库 —— 相似度用字符 3-gram Jaccard + 倒排索引，不引入 sklearn。
+"""
+from __future__ import annotations
+
+import re
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+from bom_schema import FP_COUNTED_CLASSES, STATUS_ORDER, Bom, BomItem
+
+# 单一功能点类型占比上限 —— 超过即判定为「批量打标」而非逐条识别
+SINGLE_TYPE_MAX_RATIO = 0.80
+# 描述最短字数
+MIN_DESC_LEN = 15
+# 跨 system 描述相似度告警线
+SIMILARITY_THRESHOLD = 0.85
+# 相对上一 released 版本的 FP 漂移告警线
+FP_DRIFT_THRESHOLD = 0.15
+
+#: 描述中应出现的动作词 —— 缺失说明该行只是名词短语，无法判定功能点类型
+ACTION_WORDS = [
+    "支持", "提供", "实现", "展示", "显示", "查询", "检索", "搜索", "筛选", "统计",
+    "新增", "创建", "录入", "上报", "采集", "导入", "导出", "修改", "编辑", "删除",
+    "配置", "设置", "管理", "维护", "审批", "提交", "发起", "推送", "通知", "告警",
+    "生成", "计算", "分析", "预测", "识别", "推荐", "评估", "输出", "同步", "对接",
+    "监控", "调度", "训练", "标注", "发布", "注册", "校验", "结算", "派单",
+]
+
+
+@dataclass
+class Finding:
+    gate: str
+    severity: str                 # fail | warn
+    blocks: str | None            # 阻断晋升到该状态；None = 仅提示
+    scope: str                    # item | system | bom
+    target: str                   # 条目 id 或 system 名
+    message: str
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class GateReport:
+    findings: list[Finding]
+    stats: dict[str, Any]
+
+    def by_gate(self) -> dict[str, list[Finding]]:
+        out: dict[str, list[Finding]] = defaultdict(list)
+        for f in self.findings:
+            out[f.gate].append(f)
+        return dict(out)
+
+    def blocking(self, target_status: str) -> list[Finding]:
+        """阻断晋升到 target_status 的发现。"""
+        lvl = STATUS_ORDER[target_status]
+        return [f for f in self.findings
+                if f.blocks is not None and STATUS_ORDER[f.blocks] <= lvl]
+
+    def highest_reachable_status(self) -> str:
+        """在不修任何问题的前提下，本 BOM 最高能升到哪一级。"""
+        for status in ("released", "reviewed", "draft"):
+            if not self.blocking(status):
+                return status
+        return "draft"
+
+
+# ---- 单条目门禁 --------------------------------------------------------
+
+
+def g01_identity(bom: Bom) -> list[Finding]:
+    """G-01 id 唯一、格式合法。结构性错误由 Bom.validate 抛出，这里只查重复。"""
+    out = []
+    seen = Counter(i.id for i in bom.items)
+    for iid, n in seen.items():
+        if n > 1:
+            out.append(Finding("G-01", "fail", "draft", "item", iid,
+                               f"id 重复 {n} 次"))
+    return out
+
+
+def g02_nesma_type(bom: Bom) -> list[Finding]:
+    """G-02 功能点类型合法（a，硬性）+ 判定理由完整（b，升 reviewed 前必补）。"""
+    out = []
+    for it in bom.active():
+        if it.cls not in FP_COUNTED_CLASSES:
+            continue
+        if it.nesma is None:
+            out.append(Finding("G-02a", "fail", "draft", "item", it.id, "缺 nesma 段"))
+            continue
+        if not (it.nesma.rationale or "").strip():
+            out.append(Finding("G-02b", "fail", "reviewed", "item", it.id,
+                               "缺 nesma.rationale（类型判定理由）"))
+        if not (it.nesma.reviewed_by or "").strip():
+            out.append(Finding("G-02c", "fail", "released", "item", it.id,
+                               "缺 nesma.reviewed_by（双人复核）"))
+    return out
+
+
+def g05_description(bom: Bom) -> list[Finding]:
+    """G-05 描述可判定性 —— 太短或无动作词，无法据以判定功能点类型。"""
+    out = []
+    for it in bom.active():
+        if it.cls not in FP_COUNTED_CLASSES:
+            continue
+        desc = (it.description or "").strip()
+        if len(desc) < MIN_DESC_LEN:
+            out.append(Finding("G-05", "warn", "released", "item", it.id,
+                               f"描述仅 {len(desc)} 字（<{MIN_DESC_LEN}）",
+                               {"description": desc}))
+        elif not any(w in desc for w in ACTION_WORDS):
+            out.append(Finding("G-05", "warn", "released", "item", it.id,
+                               "描述无动作词，仅名词短语，无法判定功能点类型",
+                               {"description": desc[:60]}))
+    return out
+
+
+def g07_class_consistency(bom: Bom) -> list[Finding]:
+    """G-07 类别与计数方式一致 —— 硬件/成品不得走功能点法，反之亦然。"""
+    out = []
+    for it in bom.active():
+        needs = it.cls in FP_COUNTED_CLASSES
+        if needs and it.nesma is None:
+            out.append(Finding("G-07", "fail", "draft", "item", it.id,
+                               f"class={it.cls} 应走功能点法但无 nesma 段"))
+        if not needs and it.nesma is not None:
+            out.append(Finding("G-07", "fail", "draft", "item", it.id,
+                               f"class={it.cls} 不走功能点法却带 nesma 段"))
+        if it.cls == "HARDWARE" and not it.spec:
+            out.append(Finding("G-07", "warn", "released", "item", it.id,
+                               "硬件条目缺 spec（型号/参数/询价基线）"))
+    return out
+
+
+def g08_maturity_evidence(bom: Bom) -> list[Finding]:
+    """G-08 成熟度举证 —— 声称已有必须说明已有什么。
+
+    这是财评最高危的一条：既有功能按新开发报价，或反过来，
+    有复用事实却不在复用度因子上体现，两边都会被挑战。
+    """
+    out = []
+    for it in bom.active():
+        if it.maturity in ("existing", "partial") and not (it.maturity_evidence or "").strip():
+            out.append(Finding("G-08", "fail", "reviewed", "item", it.id,
+                               f"maturity={it.maturity} 但缺 maturity_evidence"))
+    return out
+
+
+# ---- 系统级门禁 --------------------------------------------------------
+
+
+def g03_type_distribution(bom: Bom) -> list[Finding]:
+    """G-03 单一功能点类型占比 —— 超阈值即判定为批量打标。"""
+    out = []
+    for system, items in bom.by_system().items():
+        types = Counter(i.nesma.type for i in items
+                        if i.cls in FP_COUNTED_CLASSES and i.nesma)
+        total = sum(types.values())
+        if total < 5:
+            continue
+        top_type, top_n = types.most_common(1)[0]
+        ratio = top_n / total
+        if ratio > SINGLE_TYPE_MAX_RATIO:
+            out.append(Finding("G-03", "fail", "reviewed", "system", system,
+                               f"{top_type} 占 {ratio:.0%}（{top_n}/{total}），"
+                               f"超过 {SINGLE_TYPE_MAX_RATIO:.0%} —— 疑为批量打标",
+                               {"distribution": dict(types)}))
+    return out
+
+
+def g04_missing_ilf(bom: Bom) -> list[Finding]:
+    """G-04 无 ILF 的 system —— 应用必然维护逻辑文件，零 ILF 是系统性漏计。"""
+    out = []
+    for system, items in bom.by_system().items():
+        fp_items = [i for i in items if i.cls in FP_COUNTED_CLASSES and i.nesma]
+        if len(fp_items) < 5:
+            continue
+        types = Counter(i.nesma.type for i in fp_items)
+        if types.get("ILF", 0) == 0:
+            out.append(Finding("G-04", "fail", "reviewed", "system", system,
+                               f"{len(fp_items)} 个功能点中无任何 ILF —— "
+                               f"违反 NESMA 基本规则（应用必然维护逻辑文件）",
+                               {"distribution": dict(types)}))
+    return out
+
+
+def g11_name_uniqueness(bom: Bom) -> list[Finding]:
+    """G-11 名称在系统内不唯一 —— 无法逐条追溯，也说明拆分粒度未到基本处理级。
+
+    源表约 45% 的「功能点名称」是描述的机器截断，导入时退回层级名兜底，
+    因而同一层级下的多个功能点会重名。这些必须在 P2 重新命名。
+    """
+    out = []
+    for system, items in bom.by_system().items():
+        names = Counter(i.name for i in items if i.cls in FP_COUNTED_CLASSES)
+        dups = {n: c for n, c in names.items() if c > 1}
+        if dups:
+            worst = sorted(dups.items(), key=lambda kv: -kv[1])[:5]
+            out.append(Finding("G-11", "warn", "released", "system", system,
+                               f"{len(dups)} 个名称重复（共 {sum(dups.values())} 条），"
+                               f"最多的：{', '.join(f'{n}×{c}' for n, c in worst)}",
+                               {"duplicates": dups}))
+    return out
+
+
+def g09_gpu_dependency(bom: Bom) -> list[Finding]:
+    """G-09 声明需要推理算力，但 BOM 中无对应硬件条目。"""
+    needy = [i for i in bom.active() if i.runtime.needs_inference_gpu]
+    if not needy:
+        return []
+    has_gpu = any(i.cls == "HARDWARE" and
+                  ("GPU" in str(i.spec).upper() or "GPU" in i.name.upper())
+                  for i in bom.active())
+    if has_gpu:
+        return []
+    return [Finding("G-09", "warn", "released", "bom", "-",
+                    f"{len(needy)} 个条目声明 needs_inference_gpu，但 BOM 中无 GPU 硬件条目",
+                    {"items": [i.id for i in needy[:10]]})]
+
+
+# ---- 跨条目门禁 --------------------------------------------------------
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[\s，。、；：（）()【】\[\]0-9．.,;:]+", "", text or "")
+
+
+def _trigrams(text: str) -> set[str]:
+    t = _norm(text)
+    return {t[i:i + 3] for i in range(len(t) - 2)} if len(t) >= 3 else set()
+
+
+def g06_cross_system_duplicates(bom: Bom, threshold: float = SIMILARITY_THRESHOLD,
+                                max_candidates: int = 40) -> list[Finding]:
+    """G-06 跨 system 描述高度相似 —— 疑似重复计列。
+
+    重复计列是各地标准的明令禁止项（柳州 三(一)2.7；山东同精神）。
+    用字符 3-gram Jaccard + 倒排索引控制候选集，避免 O(n²) 全比对。
+    """
+    items = [i for i in bom.active() if i.cls in FP_COUNTED_CLASSES and i.description]
+    grams = {i.id: _trigrams(i.description) for i in items}
+    by_id = {i.id: i for i in items}
+
+    inverted: dict[str, list[str]] = defaultdict(list)
+    for iid, gs in grams.items():
+        for g in gs:
+            inverted[g].append(iid)
+    # 丢弃过于常见的 gram（出现在 >5% 条目中），它们不具区分度
+    common = {g for g, ids in inverted.items() if len(ids) > max(20, len(items) * 0.05)}
+
+    out: list[Finding] = []
+    reported: set[tuple[str, str]] = set()
+    for iid, gs in grams.items():
+        if not gs:
+            continue
+        cand = Counter()
+        for g in gs - common:
+            for other in inverted[g]:
+                if other != iid and by_id[other].path.system != by_id[iid].path.system:
+                    cand[other] += 1
+        for other, _ in cand.most_common(max_candidates):
+            key = tuple(sorted((iid, other)))
+            if key in reported:
+                continue
+            a, b = grams[iid], grams[other]
+            union = len(a | b)
+            if not union:
+                continue
+            jac = len(a & b) / union
+            if jac >= threshold:
+                reported.add(key)
+                out.append(Finding("G-06", "warn", "released", "item", iid,
+                                   f"与 {other} 描述相似度 {jac:.0%}（跨 system），疑似重复计列",
+                                   {"other": other,
+                                    "system_a": by_id[iid].path.system,
+                                    "system_b": by_id[other].path.system,
+                                    "text": by_id[iid].description[:80]}))
+    return out
+
+
+def g10_fp_drift(bom: Bom, previous: Bom | None, has_changelog: bool = False) -> list[Finding]:
+    """G-10 相对上一 released 版本的 FP 总量漂移 —— 大幅变动必须有变更说明。"""
+    if previous is None:
+        return []
+    from nesma_weights import ufp_total  # 延迟导入，避免循环
+    old, new = ufp_total(previous), ufp_total(bom)
+    if old == 0:
+        return []
+    drift = abs(new - old) / old
+    if drift > FP_DRIFT_THRESHOLD and not has_changelog:
+        return [Finding("G-10", "warn", "released", "bom", "-",
+                        f"UFP 从 {old} 变为 {new}（{drift:+.1%}），超过 "
+                        f"{FP_DRIFT_THRESHOLD:.0%} 且无 CHANGELOG 说明",
+                        {"old": old, "new": new})]
+    return []
+
+
+# ---- 编排 --------------------------------------------------------------
+
+GATES: list[Callable[[Bom], list[Finding]]] = [
+    g01_identity, g02_nesma_type, g03_type_distribution, g04_missing_ilf,
+    g05_description, g06_cross_system_duplicates, g07_class_consistency,
+    g08_maturity_evidence, g09_gpu_dependency, g11_name_uniqueness,
+]
+
+
+def run(bom: Bom, previous: Bom | None = None, has_changelog: bool = False) -> GateReport:
+    findings: list[Finding] = []
+    for gate in GATES:
+        findings.extend(gate(bom))
+    findings.extend(g10_fp_drift(bom, previous, has_changelog))
+
+    types = Counter(i.nesma.type for i in bom.active()
+                    if i.cls in FP_COUNTED_CLASSES and i.nesma)
+    stats = {
+        "items_total": len(bom.items),
+        "items_active": len(bom.active()),
+        "by_class": dict(Counter(i.cls for i in bom.active())),
+        "by_status": dict(Counter(i.status for i in bom.active())),
+        "by_maturity": dict(Counter(i.maturity for i in bom.active())),
+        "by_nesma_type": dict(types),
+        "systems": len(bom.by_system()),
+    }
+    return GateReport(findings, stats)
+
+
+def format_report(report: GateReport, bom_version: str) -> str:
+    """人读的门禁报告（markdown）。"""
+    lines = [f"# BOM 质量门禁报告 — v{bom_version}", ""]
+    s = report.stats
+    lines += [
+        f"- 条目：{s['items_active']} 有效 / {s['items_total']} 总计，"
+        f"覆盖 {s['systems']} 个系统",
+        f"- 类别分布：{s['by_class']}",
+        f"- 功能点类型分布：{s['by_nesma_type']}",
+        f"- 成熟度分布：{s['by_maturity']}",
+        f"- **不修任何问题，当前最高可晋升到：`{report.highest_reachable_status()}`**",
+        "",
+    ]
+
+    for status in ("draft", "reviewed", "released"):
+        blocking = [f for f in report.findings if f.blocks == status]
+        if not blocking:
+            continue
+        lines += [f"## 阻断晋升到 `{status}`（{len(blocking)} 条）", ""]
+        by_gate: dict[str, list[Finding]] = defaultdict(list)
+        for f in blocking:
+            by_gate[f.gate].append(f)
+        for gate in sorted(by_gate):
+            fs = by_gate[gate]
+            lines.append(f"### {gate} — {len(fs)} 条（{fs[0].severity}）")
+            for f in fs[:12]:
+                lines.append(f"- `{f.target}` {f.message}")
+            if len(fs) > 12:
+                lines.append(f"- …其余 {len(fs) - 12} 条")
+            lines.append("")
+    return "\n".join(lines)
