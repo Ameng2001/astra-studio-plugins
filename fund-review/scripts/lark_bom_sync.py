@@ -32,14 +32,19 @@ BATCH = 200          # 飞书单次批量写入上限
 PLACEHOLDER_TAG = "placeholder"
 
 
-def lark(*args: str, timeout: int = 120) -> dict[str, Any]:
-    """调用 lark-cli 并解析 JSON。默认输出是 markdown，必须显式加 --json。"""
-    cmd = ["lark-cli", *args, "--json"]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def lark(*args: str) -> dict[str, Any]:
+    """调用 lark-cli 并解析 JSON。
+
+    用 `--format json` 而不是 `--json` 指定输出格式 —— 后者在
+    `+record-batch-create` / `+record-delete` 等命令上是**载荷参数**，
+    追加会变成 `--json <载荷> --json`，末尾那个没有参数直接报错。
+    """
+    r = subprocess.run(["lark-cli", *args, "--format", "json"],
+                       capture_output=True, text=True)
     try:
         return json.loads(r.stdout)
     except json.JSONDecodeError:
-        return {"ok": False, "error": {"raw": (r.stdout or r.stderr)[:400]}}
+        return {"ok": False, "error": {"raw": (r.stdout or r.stderr)[:300]}}
 
 
 # ---- push --------------------------------------------------------------
@@ -53,13 +58,19 @@ def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
     bt = cfg["base_token"]
     tid = cfg["tables"]["功能点清单"]
 
-    existing = lark("base", "+record-list", "--base-token", bt,
-                    "--table-id", tid, "--as", "user", "--limit", str(BATCH))
-    ids = (existing.get("data") or {}).get("record_id_list", [])
-    while ids:
-        lark("base", "+record-delete", "--base-token", bt, "--table-id", tid,
-             "--as", "user", "--yes", "--record-id", ",".join(ids[:BATCH]))
-        ids = ids[BATCH:]
+    # 清空必须**反复取页直到表空** —— 只取一页 id 删完就退出，
+    # 会留下剩余记录与新数据叠加（实测 1764 条只删了 200）
+    while True:
+        r = lark("base", "+record-list", "--base-token", bt, "--table-id", tid,
+                 "--as", "user", "--limit", str(BATCH))
+        ids = (r.get("data") or {}).get("record_id_list", [])
+        if not ids:
+            break
+        d = lark("base", "+record-delete", "--base-token", bt, "--table-id", tid,
+                 "--as", "user", "--yes",
+                 "--json", json.dumps({"record_id_list": ids}))
+        if not d.get("ok"):
+            return {"ok": False, "written": 0, "error": d.get("error")}
 
     records = [_to_row(i) for i in bom.active()]
     written = 0

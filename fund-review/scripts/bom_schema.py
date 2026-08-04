@@ -82,16 +82,22 @@ class Nesma:
 
 @dataclass
 class Path_:
-    """产品树路径。层级数因产品线而异，允许 l2/l3 为空。"""
+    """产品树路径。层级数因产品线而异，允许 l2..l4 为空。
+
+    l4 是为对齐《功能点计算书》的「四级模块」而加 —— 方案人员在飞书上
+    可能用到第四级。BOM 自身导入只到三级，l4 默认为空。
+    """
 
     product_line: str
     system: str
     l1: str | None = None
     l2: str | None = None
     l3: str | None = None
+    l4: str | None = None
 
     def as_tuple(self) -> tuple[str, ...]:
-        return tuple(x for x in (self.product_line, self.system, self.l1, self.l2, self.l3) if x)
+        return tuple(x for x in (self.product_line, self.system,
+                                 self.l1, self.l2, self.l3, self.l4) if x)
 
 
 @dataclass
