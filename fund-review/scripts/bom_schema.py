@@ -37,8 +37,32 @@ ITEM_CLASSES = {
     "SERVICE",      # 实施/集成/培训/设计/测试 → 费率法 / 人天法
 }
 
-#: 走功能点法计数的类别 —— 必须有 nesma 段
+#: 走功能点法计数的类别 —— 带 nesma 段时按功能点计
 FP_COUNTED_CLASSES = {"SOFTWARE_FP", "KB", "DATASET"}
+
+#: 造价方法二选一的类别：同一条目要么按功能点计（nesma），要么按购置计（spec）。
+#: KB/DATASET 天然两栖 —— 「我们把外部药品目录接进来做治理加工」是开发工作量，
+#: 「我们替客户买药智网年度订阅」是购置费。两者是**不同标的**，可以并存为
+#: 两条互相引用的条目，但**单条**只能有一个造价口径，否则就是重复计列。
+DUAL_METHOD_CLASSES = {"KB", "DATASET"}
+
+#: 只能按购置计的类别 —— 必须有 spec，不得有 nesma
+PURCHASE_ONLY_CLASSES = {"PRODUCT", "MODEL", "HARDWARE", "SERVICE"}
+
+
+def is_fp_counted(item: "BomItem") -> bool:
+    """这一条是否按功能点计。
+
+    光看 class 不够 —— KB/DATASET 两栖，同一个 class 下既有走功能点的
+    治理加工条目，也有走购置的订阅条目。凡是筛「进功能点测算表的条目」
+    都该用这个，别再写 `cls in FP_COUNTED_CLASSES`。
+    """
+    return item.cls in FP_COUNTED_CLASSES and item.nesma is not None
+
+
+def is_purchase(item: "BomItem") -> bool:
+    """这一条是否按购置计 —— 以「报到哪个财评科目」为准，不以 class 为准。"""
+    return bool(item.spec.get("subject"))
 
 NESMA_TYPES = {"ILF", "ELF", "EI", "EO", "EQ"}
 
@@ -157,11 +181,21 @@ class BomItem:
         if not self.name.strip():
             raise BomError(f"{self.id}: name 为空")
 
-        needs_fp = self.cls in FP_COUNTED_CLASSES
-        if needs_fp and self.nesma is None:
+        if self.cls in PURCHASE_ONLY_CLASSES:
+            if self.nesma is not None:
+                raise BomError(f"{self.id}: class={self.cls} 不走功能点法，不应有 nesma 段")
+        elif self.cls in DUAL_METHOD_CLASSES:
+            # 二选一，且必选其一 —— 两个都有是重复计列，都没有是漏计
+            if self.nesma is not None and self.spec.get("subject"):
+                raise BomError(
+                    f"{self.id}: class={self.cls} 同时有 nesma 与 spec.subject —— "
+                    f"同一条目不能既按功能点计又按购置计。拆成两条互相引用的条目")
+            if self.nesma is None and not self.spec.get("subject"):
+                raise BomError(
+                    f"{self.id}: class={self.cls} 既无 nesma 也无 spec.subject —— "
+                    f"造价口径未定")
+        elif self.nesma is None:      # SOFTWARE_FP
             raise BomError(f"{self.id}: class={self.cls} 走功能点法，但缺 nesma 段")
-        if not needs_fp and self.nesma is not None:
-            raise BomError(f"{self.id}: class={self.cls} 不走功能点法，不应有 nesma 段")
         if self.nesma:
             self.nesma.validate(self.id)
 
@@ -242,7 +276,7 @@ class Bom:
 
     # ---- 磁盘 IO ----
 
-    def save(self, root: Path, shard_key=lambda i: i.path.system) -> list[Path]:
+    def save(self, root: Path, shard_key=None) -> list[Path]:
         root = Path(root)
         (root / "items").mkdir(parents=True, exist_ok=True)
         (root / "VERSION").write_text(self.version + "\n", encoding="utf-8")
@@ -251,9 +285,10 @@ class Bom:
                 yaml.safe_dump(self.taxonomy, allow_unicode=True, sort_keys=False),
                 encoding="utf-8")
 
+        key = shard_key or default_shard_key
         shards: dict[str, list[BomItem]] = {}
         for it in self.items:
-            shards.setdefault(_slug(shard_key(it)), []).append(it)
+            shards.setdefault(_slug(key(it)), []).append(it)
 
         written = []
         for name, items in sorted(shards.items()):
@@ -285,6 +320,17 @@ class Bom:
                                f"≠ {SCHEMA_VERSION}，需迁移")
             items.extend(BomItem.from_dict(d) for d in data.get("items", []))
         return cls(version, items, taxonomy)
+
+
+def default_shard_key(item: BomItem) -> str:
+    """默认按系统分片；带采购科目的条目自成一片。
+
+    采购条目跨系统（一个成品软件顶掉整个系统的功能点），而且审阅的人不同 ——
+    功能点清单给方案人员看，采购清单给商务看。混在一起两边都不好读。
+    """
+    if item.spec.get("subject"):
+        return "采购科目"
+    return item.path.system
 
 
 def _slug(text: str) -> str:

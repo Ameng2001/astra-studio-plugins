@@ -194,6 +194,86 @@ class CostingEngine:
                     f"≥{ev.get('category_total_threshold')} 元需 "
                     f"{ev.get('quotes_required')} 家盖章询价单")}
 
+    # ---- 采购科目（软件产品 / 数据资源与数据模型）----
+
+    #: 这两个成本元素都表示「本条目在建设期按购置计价」。
+    #: 落到哪个财评科目由条目自己的 spec.subject 决定 —— 成本元素回答
+    #: 「怎么算」，科目回答「记到哪一行」，两件事不该合并。
+    PURCHASE_ELEMENTS = {"CE-LIC", "CE-DATA"}
+
+    def purchases(self, items: list[BomItem]) -> dict[str, Any]:
+        """按财评科目汇总购置条目。
+
+        无单价的**不静默计 0**，单列「待询价」—— 财评看到 ¥0 会当成没有这项，
+        看到「待询价 13 项」才知道是价格没到位。这两种状态必须能区分。
+        """
+        groups: dict[str, dict[str, Any]] = {}
+        pending: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+
+        for i in items:
+            subject = i.spec.get("subject")
+            if not subject:
+                continue
+            ce = self._construction_elements(i)
+            if ce is not None and not (ce & self.PURCHASE_ELEMENTS):
+                mode = self.delivery.assigned.get(i.id) if self.delivery else None
+                skipped.append({"id": i.id, "name": i.name, "subject": subject,
+                                "mode": mode,
+                                "reason": ("本方案不采用此形态" if mode == "D0"
+                                           else f"形态 {mode} 的建设期不含购置元素"),
+                                # 带上 raw-input 参照值 —— 与旧清单对不上时，
+                                # 差额要能归因到「这批标的换了交付形态」，
+                                # 而不是含糊说一句「口径不同」
+                                "legacy_reference_yuan":
+                                    (i.legacy_quote or {}).get("quote_yuan")})
+                continue
+
+            price = i.spec.get("reference_unit_price_yuan")
+            qty = i.spec.get("qty") or 0
+            row = {"id": i.id, "name": i.name, "system": i.path.system,
+                   "subject_detail": i.spec.get("subject_detail", ""),
+                   "pricing_model": i.spec.get("pricing_model", ""),
+                   "unit": i.spec.get("unit", ""), "qty": qty,
+                   "reference_unit_price": price,
+                   "amount": xlround((price or 0) * qty, 2),
+                   "pricing_basis": i.spec.get("pricing_basis", ""),
+                   "evidence_required": i.spec.get("evidence_required", []),
+                   "legacy_reference_yuan": (i.legacy_quote or {}).get("quote_yuan")}
+            g = groups.setdefault(subject, {"subject": subject, "rows": [],
+                                            "total": 0.0, "pending_count": 0,
+                                            "legacy_reference_total": 0})
+            g["rows"].append(row)
+            if price is None:
+                g["pending_count"] += 1
+                pending.append({"id": i.id, "name": i.name, "subject": subject,
+                                "note": i.spec.get("pricing_basis", "待询价"),
+                                "legacy_reference_yuan": row["legacy_reference_yuan"]})
+            else:
+                g["total"] += row["amount"]
+            g["legacy_reference_total"] += row["legacy_reference_yuan"] or 0
+
+        for g in groups.values():
+            g["total"] = xlround(g["total"], 2)
+
+        ev = self.pack.data.get("procurement_evidence", {})
+        return {
+            "by_subject": [groups[k] for k in sorted(groups)],
+            "total": xlround(sum(g["total"] for g in groups.values()), 2),
+            "pending": pending,
+            "not_applicable": skipped,
+            "evidence_rules": {
+                "software_product": ev.get("software_product", {}).get("citation"),
+                "data_model": ev.get("data_model", {}).get("citation"),
+            },
+        }
+
+    @staticmethod
+    def subject_total(purchases: dict[str, Any], code: str) -> float:
+        """按科目号取小计 —— 其他费用的计费基数要分科目，不能一锅端。"""
+        return xlround(sum(g["total"] for g in purchases["by_subject"]
+                           if g["subject"].startswith(code)), 2)
+
     # ---- 实施集成 ----
 
     def implementation(self) -> dict[str, Any]:
@@ -228,12 +308,19 @@ class CostingEngine:
     # ---- 待核价项 ----
 
     def pending_pricing(self, items: list[BomItem]) -> list[dict[str, Any]]:
-        """走 CE-LIC 但 BOM 中无许可价的条目 —— 显式列为待核价，不静默计 0。"""
+        """走 CE-LIC 却**连采购条目都没有**的系统 —— 显式列为待核价。
+
+        有 spec.subject 的条目由 purchases() 逐条列出待询价，这里不重复报。
+        本方法剩下的职责是兜底：某个系统被指派了买断形态，但 BOM 里根本
+        没建对应的采购标的 —— 那是漏建条目，比缺价格严重。
+        """
         if self.delivery is None:
             return []
         out = []
         seen = set()
         for i in items:
+            if i.spec.get("subject"):
+                continue          # 已由 purchases() 逐条列明
             ce = self._construction_elements(i) or set()
             if "CE-LIC" not in ce:
                 continue
@@ -243,7 +330,7 @@ class CostingEngine:
             seen.add(key)
             out.append({"system": i.path.system, "mode": self.delivery.assigned.get(i.id),
                         "element": "CE-LIC",
-                        "note": "许可/买断价格待商务核价，本次未计入金额"})
+                        "note": "该系统按买断形态交付，但 BOM 中无对应的采购标的条目 —— 缺的是条目不是价格，须先补 class=PRODUCT/MODEL 的采购条目"})
         return out
 
     # ---- 其他建设费用 ----
@@ -287,12 +374,19 @@ class CostingEngine:
         items, excluded = self.in_scope()
         sys_costs = self.software_dev(items)
         hw = self.hardware(items)
+        pur = self.purchases(items)
         impl = self.implementation()
         pending = self.pending_pricing(items)
 
         sw_total = xlround(sum(s.cost for s in sys_costs), 2)
         dev_cats = {s.dev_category for s in sys_costs}
-        fees = self.other_fees(sw_total, hw["total"], dev_categories=dev_cats)
+        # 成品软件集成费与第三方测试费的基数只含**软件产品购置费**（三(二)1）；
+        # 数据资源和服务购置费（三(二)2）不在任何一项其他费用的基数里 ——
+        # 山东标准 表4/表5 的基数定义就是这样，别顺手加进去。
+        sw_purchase = self.subject_total(pur, "三(二)1")
+        fees = self.other_fees(sw_total, hw["total"],
+                               software_purchase_total=sw_purchase,
+                               dev_categories=dev_cats)
         fee_total = xlround(sum(f["amount_yuan"] for f in fees), 2)
 
         return {
@@ -312,6 +406,7 @@ class CostingEngine:
                 "total": sw_total,
             },
             "hardware": hw,
+            "purchases": pur,
             "implementation": impl,
             "pending_pricing": pending,
             "other_fees": fees,
@@ -319,11 +414,15 @@ class CostingEngine:
                          if self.delivery else None),
             "totals": {
                 "software_dev": sw_total,
+                "software_purchase": sw_purchase,
+                "data_purchase": self.subject_total(pur, "三(二)2"),
                 "hardware_purchase": hw["total"],
                 "implementation": impl["total"],
                 "other_fees": fee_total,
                 "construction_total": xlround(
-                    sw_total + hw["total"] + impl["total"] + fee_total, 2),
+                    sw_total + pur["total"] + hw["total"]
+                    + impl["total"] + fee_total, 2),
+                "pending_pricing_count": len(pur["pending"]) + len(pending),
             },
         }
 

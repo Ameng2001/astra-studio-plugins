@@ -14,7 +14,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from bom_schema import FP_COUNTED_CLASSES, STATUS_ORDER, Bom, BomItem
+from bom_schema import (DUAL_METHOD_CLASSES, FP_COUNTED_CLASSES, STATUS_ORDER,
+                        Bom, BomItem, is_fp_counted, is_purchase)
 
 # 单一功能点类型占比上限 —— 超过即判定为「批量打标」而非逐条识别
 SINGLE_TYPE_MAX_RATIO = 0.80
@@ -89,8 +90,8 @@ def g02_nesma_type(bom: Bom) -> list[Finding]:
     """G-02 功能点类型合法（a，硬性）+ 判定理由完整（b，升 reviewed 前必补）。"""
     out = []
     for it in bom.active():
-        if it.cls not in FP_COUNTED_CLASSES:
-            continue
+        if it.cls not in FP_COUNTED_CLASSES or is_purchase(it):
+            continue          # 采购口径的 KB/DATASET 条目本就不该有 nesma
         if it.nesma is None:
             out.append(Finding("G-02a", "fail", "draft", "item", it.id, "缺 nesma 段"))
             continue
@@ -107,7 +108,7 @@ def g05_description(bom: Bom) -> list[Finding]:
     """G-05 描述可判定性 —— 太短或无动作词，无法据以判定功能点类型。"""
     out = []
     for it in bom.active():
-        if it.cls not in FP_COUNTED_CLASSES:
+        if not is_fp_counted(it):
             continue
         desc = (it.description or "").strip()
         if len(desc) < MIN_DESC_LEN:
@@ -125,13 +126,19 @@ def g07_class_consistency(bom: Bom) -> list[Finding]:
     """G-07 类别与计数方式一致 —— 硬件/成品不得走功能点法，反之亦然。"""
     out = []
     for it in bom.active():
+        dual = it.cls in DUAL_METHOD_CLASSES
         needs = it.cls in FP_COUNTED_CLASSES
-        if needs and it.nesma is None:
+        if needs and it.nesma is None and not (dual and is_purchase(it)):
             out.append(Finding("G-07", "fail", "draft", "item", it.id,
-                               f"class={it.cls} 应走功能点法但无 nesma 段"))
+                               f"class={it.cls} 应走功能点法但无 nesma 段，"
+                               f"也没有 spec.subject —— 造价口径未定"))
         if not needs and it.nesma is not None:
             out.append(Finding("G-07", "fail", "draft", "item", it.id,
                                f"class={it.cls} 不走功能点法却带 nesma 段"))
+        if dual and it.nesma is not None and is_purchase(it):
+            out.append(Finding("G-07", "fail", "draft", "item", it.id,
+                               f"class={it.cls} 同时有 nesma 与 spec.subject —— "
+                               f"同一条目既按功能点计又按购置计，构成重复计列"))
         if it.cls == "HARDWARE" and not it.spec:
             out.append(Finding("G-07", "warn", "released", "item", it.id,
                                "硬件条目缺 spec（型号/参数/询价基线）"))
@@ -160,7 +167,7 @@ def g03_type_distribution(bom: Bom) -> list[Finding]:
     out = []
     for system, items in bom.by_system().items():
         types = Counter(i.nesma.type for i in items
-                        if i.cls in FP_COUNTED_CLASSES and i.nesma)
+                        if is_fp_counted(i))
         total = sum(types.values())
         if total < 5:
             continue
@@ -178,7 +185,7 @@ def g04_missing_ilf(bom: Bom) -> list[Finding]:
     """G-04 无 ILF 的 system —— 应用必然维护逻辑文件，零 ILF 是系统性漏计。"""
     out = []
     for system, items in bom.by_system().items():
-        fp_items = [i for i in items if i.cls in FP_COUNTED_CLASSES and i.nesma]
+        fp_items = [i for i in items if is_fp_counted(i)]
         if len(fp_items) < 5:
             continue
         types = Counter(i.nesma.type for i in fp_items)
@@ -198,7 +205,7 @@ def g11_name_uniqueness(bom: Bom) -> list[Finding]:
     """
     out = []
     for system, items in bom.by_system().items():
-        names = Counter(i.name for i in items if i.cls in FP_COUNTED_CLASSES)
+        names = Counter(i.name for i in items if is_fp_counted(i))
         dups = {n: c for n, c in names.items() if c > 1}
         if dups:
             worst = sorted(dups.items(), key=lambda kv: -kv[1])[:5]
@@ -229,6 +236,49 @@ def g12_placeholders(bom: Bom) -> list[Finding]:
                     f"{len(ph)} 条占位条目待确认（{dict(by_system)}）—— "
                     f"须在飞书共创环节裁定后才能进入 reviewed",
                     {"ids": [i.id for i in ph[:20]], "total": len(ph)})]
+
+
+#: 各科目的询价举证要求由标准包给出；这里只查「该填的字段填了没」。
+#: 单价可以空（询价单是商务后补的），但科目和举证清单不能空 ——
+#: 那说明这条根本没想清楚该报到哪一行。
+_PURCHASE_REQUIRED = ("subject", "subject_code", "pricing_model",
+                      "evidence_required", "pricing_basis")
+
+
+def g13_purchase_subject(bom: Bom) -> list[Finding]:
+    """G-13 采购条目的科目与举证完整性。
+
+    分三档，因为这三件事的补齐时机完全不同：
+      - 科目/举证字段缺失 → 阻断 draft，这是编制时就该定的
+      - 单价缺失          → 阻断 released，等商务询价单
+      - 与功能点条目双计   → 阻断 draft，重复计列是硬伤
+    """
+    out: list[Finding] = []
+    no_price = []
+    for it in bom.active():
+        if not is_purchase(it):
+            continue
+        missing = [k for k in _PURCHASE_REQUIRED if not it.spec.get(k)]
+        if missing:
+            out.append(Finding("G-13a", "fail", "draft", "item", it.id,
+                               f"采购条目缺 spec.{'/'.join(missing)}",
+                               {"subject": it.spec.get("subject")}))
+        if it.spec.get("reference_unit_price_yuan") is None:
+            no_price.append(it)
+        if str(it.spec.get("pricing_model", "")).startswith("TODO"):
+            out.append(Finding("G-13c", "warn", "reviewed", "item", it.id,
+                               f"授权/计费方式未定（{it.spec['pricing_model']}）—— "
+                               f"它决定该条进建设期还是运营期，须在共创环节裁定"))
+    if no_price:
+        by_subject: dict[str, int] = defaultdict(int)
+        for i in no_price:
+            by_subject[i.spec["subject"]] += 1
+        out.append(Finding("G-13b", "fail", "released", "bom", "-",
+                           f"{len(no_price)} 条采购条目无单价（{dict(by_subject)}）—— "
+                           f"引擎列为待询价不计入金额；出正式报价前须补齐盖章询价单",
+                           {"ids": [i.id for i in no_price[:20]],
+                            "total": len(no_price)}))
+    return out
 
 
 def g09_gpu_dependency(bom: Bom) -> list[Finding]:
@@ -265,7 +315,7 @@ def g06_cross_system_duplicates(bom: Bom, threshold: float = SIMILARITY_THRESHOL
     重复计列是各地标准的明令禁止项（柳州 三(一)2.7；山东同精神）。
     用字符 3-gram Jaccard + 倒排索引控制候选集，避免 O(n²) 全比对。
     """
-    items = [i for i in bom.active() if i.cls in FP_COUNTED_CLASSES and i.description]
+    items = [i for i in bom.active() if is_fp_counted(i) and i.description]
     grams = {i.id: _trigrams(i.description) for i in items}
     by_id = {i.id: i for i in items}
 
@@ -329,7 +379,7 @@ GATES: list[Callable[[Bom], list[Finding]]] = [
     g01_identity, g02_nesma_type, g03_type_distribution, g04_missing_ilf,
     g05_description, g06_cross_system_duplicates, g07_class_consistency,
     g08_maturity_evidence, g09_gpu_dependency, g11_name_uniqueness,
-    g12_placeholders,
+    g12_placeholders, g13_purchase_subject,
 ]
 
 
@@ -340,7 +390,7 @@ def run(bom: Bom, previous: Bom | None = None, has_changelog: bool = False) -> G
     findings.extend(g10_fp_drift(bom, previous, has_changelog))
 
     types = Counter(i.nesma.type for i in bom.active()
-                    if i.cls in FP_COUNTED_CLASSES and i.nesma)
+                    if is_fp_counted(i))
     stats = {
         "items_total": len(bom.items),
         "items_active": len(bom.active()),

@@ -1,6 +1,6 @@
 ---
 name: bom-validate
-description: '对造价 BOM 执行质量门禁 G-01..G-11，回答"当前版本能晋升到哪一级、还差什么"。检查功能点类型分布、ILF 缺失、描述可判定性、跨系统重复计列、成熟度举证等。触发词："校验BOM", "BOM质量门禁", "检查功能点拆分", "/fund-review:bom-validate"。'
+description: '对造价 BOM 执行质量门禁 G-01..G-13，回答"当前版本能晋升到哪一级、还差什么"。检查功能点类型分布、ILF 缺失、描述可判定性、跨系统重复计列、成熟度举证等。触发词："校验BOM", "BOM质量门禁", "检查功能点拆分", "/fund-review:bom-validate"。'
 allowed-tools: Read, Write, Bash, Glob
 user-invocable: true
 ---
@@ -35,6 +35,10 @@ PYTHONPATH=<plugin>/scripts python3 <plugin>/scripts/bom_validate.py \
 | G-09 | 声明需 GPU 但 BOM 无硬件条目 | — | released |
 | G-10 | 相对上一 released 的 FP 漂移 | >15% 且无 CHANGELOG | released |
 | G-11 | 名称在 system 内唯一 | — | released |
+| G-12 | 占位条目未确认 | 存在即 | reviewed |
+| G-13a | 采购条目缺科目 / 举证字段 | — | draft |
+| G-13b | 采购条目无单价 | 存在即 | released |
+| G-13c | 采购条目授权/计费方式仍是 TODO | — | reviewed |
 
 ## 各门禁的判断依据
 
@@ -45,6 +49,15 @@ PYTHONPATH=<plugin>/scripts python3 <plugin>/scripts/bom_validate.py \
   是真重复（删一条），还是同名不同边界（补 rationale 说明差异）。
 - **G-08** 是最高危的一条：既有功能按新开发报价会被挑战；反过来，有复用事实却不在
   复用度因子上体现，一旦被比对到原始清单同样会被质疑。两个方向都要防。
+- **G-07 的两栖判定**：`KB` / `DATASET` 既可按功能点计（治理加工的开发工作量），
+  也可按购置计（外部数据的访问权）。同一 class 下两种条目并存是**正常的**，
+  但单条只能有一个口径 —— 同时有 `nesma` 与 `spec.subject` 即构成重复计列，阻断 draft。
+  筛「按功能点计的条目」一律用 `is_fp_counted()`，不要写 `cls in FP_COUNTED_CLASSES`。
+- **G-13 分三档**是因为这三件事的补齐时机完全不同：科目与举证清单是**编制时**
+  就该定的（定不了说明没想清楚该报哪一行）；单价等商务询价单；授权方式（买断/期限/
+  按年订阅）决定该条进建设期还是运营期，得在共创环节裁定。
+  无单价的条目由引擎列为「待询价」而非计 0 —— 报表上 ¥0 与「没有这一项」长得一样，
+  这两种状态必须能区分。
 
 ## 解读报告
 

@@ -235,20 +235,37 @@ class SelfReview:
         # 数据模型订阅走购置科目时的人月举证
         dm = ev.get("data_model")
         modes_used = (self.result.get("delivery") or {}).get("modes_used", [])
-        if dm and "D5" in modes_used:
+        if dm and ({"D4", "D5", "D8"} & set(modes_used)):
+            # 分档回答：标准要 5 个字段，我们已经能给几个？
+            # 笼统说「待补询价材料」会让「一个字段都没有」和「只差单价」
+            # 长得一样，而这两种状态离能送审差着一整轮商务流程。
+            models = [i for i in self.bom.active()
+                      if i.cls == "MODEL" and i.spec.get("subject")]
+            with_effort = [i for i in models
+                           if i.spec.get("build_effort_man_months")]
+            with_price = [i for i in models
+                          if i.spec.get("reference_unit_price_yuan") is not None]
+            ready = bool(models) and len(with_price) == len(models)
             self.add(
-                id="C5-02", category="举证", severity="warn",
-                title="模型订阅落「数据资源和服务购置费」科目，需人月工作量举证",
-                reviewer_question="这个模型订阅价是怎么定的？依据在哪？",
+                id="C5-02", category="举证", severity="warn" if not ready else "info",
+                title="模型作为数据模型购置，需按标准格式举证",
+                reviewer_question="这个模型的价是怎么定的？依据在哪？",
                 our_answer=(
-                    "本标准明确要求数据模型询价单包含"
+                    f"本标准要求数据模型询价单包含"
                     f"「{'、'.join(dm.get('required_fields', []))}」。"
-                    "⚠️ 需按此格式准备询价材料 —— 订阅定价的人月工作量口径"
-                    "与该要求天然契合。"),
-                answerable=False,
+                    f"BOM 中 {len(models)} 个模型购置标的："
+                    f"模型类型已逐个填写；"
+                    f"预计搭建工作量 {len(with_effort)}/{len(models)} 已折算为人月"
+                    f"（人天 ÷ 21.75）；"
+                    + (f"模型单价 {len(with_price)}/{len(models)} 已填。"
+                       if with_price else
+                       "⚠️ 模型单价全部待商务询价，引擎已列入待询价、未计入金额。")),
+                answerable=ready,
                 citation=(f"p.{dm.get('citation', {}).get('page', '')} "
                           f"{dm.get('citation', {}).get('section', '')}"),
-                action="按 required_fields 准备数据模型询价材料")
+                action=("—" if ready else
+                        f"向 {len(models) - len(with_price)} 个模型补盖章询价单，"
+                        f"人月工作量口径已备"))
 
         w = ev.get("warranty", {})
         if w:
