@@ -42,19 +42,31 @@ user-invocable: true
 跨文件手工汇总，而那恰恰是最容易出错的地方。
 
 列顺序对齐财评计算书：`子系统 → 一~四级模块 → 功能点计数项 → 类别 →
-UFP → 重用程度 → 修改类型 → US → 备注`。
+UFP → 应用类型 → 重用程度 → 修改类型 → US → 备注`。
 
-**UFP 与 US 是公式列，不是数据列。** 它们跨表引用 `0 参数表`：
+**UFP 与 US 是公式列，不是数据列。** 它们跨表引用 `0 参数表`（20 行：
+功能点权重 5 + 重用系数 3 + 修改类型系数 3 + 应用类型系数 7 + 规模变更因子 2）：
 
 ```
 UFP = SUM([0 参数表].FILTER(AND(参数类别="功能点权重", 参数名=[类别])).[取值])
-US  = UFP × 重用系数 × 修改类型系数        （同样查参数表）
+US  = ROUND(UFP × 规模变更因子 × 重用系数 × 修改类型系数 × 应用类型系数, 2)
 ```
 
-好处是权重口径只有一处可改：改 `0 参数表` 里 EO=5，15 张表一起变
+好处是系数口径只有一处可改：改 `0 参数表` 里 EO=5，15 张表一起变
 （飞书公式重算是**异步的，有数秒延迟**，刚改完立刻回读可能拿到旧值，
 不要据此判断联动失效）。坏处是 push 不能写 UFP/US —— 写了会被公式覆盖，
 脚本只写数据列。
+
+**应用类型不能省。** AI 类子系统因子 1.5、业务处理 1.0，漏掉这一项会把
+5 个 AI 子系统整体少算三分之一。但它**不是靠给每个子系统各配一张参数表**
+解决的 —— 系数取值是标准规定的（全省统一，L1，进共享参数表），
+某子系统属于哪一类是产品事实（L0，BOM 的 `app_type`，进子系统表的
+「应用类型」列）。拆参数表等于把同一个 1.5 抄 5 遍，标准改版要改 5 处，
+而且谁改了自己那张表都没人察觉。
+
+**逐条 ROUND 到 2 位**，与引擎 `xlround(afp, 2)` 对齐。不加这层，AI 类
+子系统每个 EO 差 0.005（5×1.21×1.5 = 9.075 vs 9.08），227 行的平台能力
+就差 0.24 —— 财评拿计算书对测算表时对不上，得当场解释。
 
 配置 `lark-worksheet.json`：
 
@@ -121,7 +133,17 @@ PYTHONPATH=$PLUG python3 $PLUG/lark_bom_sync.py pull --bom bom --config bom/lark
    `record_id_list` 长度是精确的写入条数，用它对账
 6. **`--json @file` 只吃相对于 cwd 的相对路径；`--fields` 完全不接受 `@file`**，
    必须内联
-7. **建资源的命令会在 JSON 前先打一行散文** —— `+create-folder`、`+table-create`
+7. **改公式字段要先读指南再加 `--i-have-read-guide`** —— `+field-update`
+   在 `--json.type` 为 `formula` 时会硬性拒绝，让你先读
+   `skills/lark-base/references/formula-field-guide.md`。表达式写**名称**语法
+   （`[0 参数表].FILTER(...)`），飞书存储时自己归一化成 `$table[id].$field[id]`。
+   硬约束：FILTER / SUMIF / COUNTIF / MAP **不得互相嵌套**（并列相乘可以）
+8. **`+field-create` 用的是 `field-list` 的返回形状**（`name` / `type` 字符串 /
+   `options` 平铺），不是 OpenAPI 的 `field_name` / 数字 type / `property` 嵌套。
+   混用报 `Invalid discriminator value`
+9. **建列返回 ok 后 `field-list` 未必立刻可见** —— 最终一致。不重试就会在
+   下一步取 field id 时 KeyError，而列其实已经建好了
+10. **建资源的命令会在 JSON 前先打一行散文** —— `+create-folder`、`+table-create`
    都是。解析崩了**不代表操作失败**。永远先看 `ok`，再用 `+table-list` /
    `+folder-list` 回查 id，不要靠猜返回结构的键名。当初就是解析崩了以为失败、
    重跑一遍，建出了两份文件夹和两个 Base
