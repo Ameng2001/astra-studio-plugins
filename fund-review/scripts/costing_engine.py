@@ -95,6 +95,27 @@ class CostingEngine:
         self.delivery = delivery
         self.profile = get_profile(pack.formula_profile)
 
+    def reuse_level(self, item: BomItem) -> str:
+        """本条目适用的复用度档位。
+
+        **复用度不该由人逐条填。** BOM 里已有 `maturity`（产品成熟度，产品事实），
+        各省标准包用 `reuse.aliases_by_project_type` 把它映射到自己的档位词表 ——
+        同一个 `partial`，山东叫「升级改造_既有功能优化完善」、广东叫「中」，
+        取值还不一样。BOM 只存事实，档位由各省认领。
+
+        新建项目下山东一律取「新建」=1.0（标准明文：与供应商的产品成熟度无关，
+        产品成熟度是内部成本口径，不是甲方的既有系统），所以映射表里三个
+        maturity 都指向「新建」—— 等于本项目忽略这一维，但忽略是**算出来的**，
+        不是靠人在表里填 1763 个「低」。
+
+        没有映射表就退回 deal 级取值，兼容旧标准包。
+        """
+        node = (self.pack.data.get("factors", {}).get("reuse") or {})
+        table = (node.get("aliases_by_project_type") or {}).get(self.deal.project_type)
+        if not table:
+            return self.deal.reuse_level
+        return table.get(item.maturity, self.deal.reuse_level)
+
     def _construction_elements(self, item: BomItem) -> set[str] | None:
         """该条目在其交付形态下，建设期出现哪些成本元素。
 
@@ -153,7 +174,7 @@ class CostingEngine:
                 by_type[i.nesma.type] += 1
                 afp += self.profile.adjusted_fp(
                     w, pack=self.pack, counting_method=method,
-                    reuse_level=self.deal.reuse_level,
+                    reuse_level=self.reuse_level(i),
                     app_type=i.app_type or "业务处理")
             afp = xlround(afp, 2)
             effort = self.profile.effort_man_months(afp, pack=self.pack)

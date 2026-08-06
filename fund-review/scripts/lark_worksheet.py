@@ -55,7 +55,16 @@ TYPE_TO_SHEET = {"ELF": "EIF"}
 TYPE_FROM_SHEET = {"EIF": "ELF"}
 
 FIELDS = ["子系统", "一级模块", "二级模块", "三级模块", "四级模块",
-          "功能点计数项名称", "功能描述", "类别", "应用类型", "备注", "条目ID"]
+          "功能点计数项名称", "功能描述", "类别", "应用类型", "成熟度",
+          "成熟度依据", "备注", "条目ID"]
+
+#: BOM 的 maturity → 表上的中文。这是**产品事实**，不是复用度取值 ——
+#: 复用度因子由各省标准按 maturity 映射（pack.factors.reuse.aliases），
+#: 山东的键是「新建/升级改造_*」，广东是「高/中/低」。同一个 partial，
+#: 两省叫法不同、取值也可能不同，所以 BOM 只存事实不存档位。
+MATURITY_LABEL = {"new": "没有，规划中", "partial": "已有部分/需迭代",
+                  "existing": "已有成熟版本"}
+MATURITY_FROM_LABEL = {v: k for k, v in MATURITY_LABEL.items()}
 
 
 def _row(it: BomItem) -> dict[str, Any]:
@@ -68,6 +77,8 @@ def _row(it: BomItem) -> dict[str, Any]:
         # 应用类型是**产品事实**（BOM 的 app_type），系数取值在「0 参数表」里
         # 按标准规定给。两者分开，换省只改参数表、重新归类只改这一列。
         "应用类型": it.app_type or "业务处理",
+        "成熟度": MATURITY_LABEL.get(it.maturity, it.maturity),
+        "成熟度依据": it.maturity_evidence or "",
         "备注": "【占位待确认】" if "placeholder" in it.tags else "",
         "条目ID": it.id,
     }
@@ -204,6 +215,10 @@ def pull(bom: Bom, cfg: dict[str, Any], out: Path) -> dict[str, Any]:
             ("path.l2", it.path.l2 or "", r.get("二级模块", "").strip()),
             ("path.l3", it.path.l3 or "", r.get("三级模块", "").strip()),
             ("path.l4", it.path.l4 or "", r.get("四级模块", "").strip()),
+            ("maturity", it.maturity,
+             MATURITY_FROM_LABEL.get(r.get("成熟度", "").strip(), "")),
+            ("maturity_evidence", it.maturity_evidence or "",
+             r.get("成熟度依据", "").strip()),
         ):
             if after and after != before:
                 changes.append({"id": iid, "system": it.path.system, "field": field,

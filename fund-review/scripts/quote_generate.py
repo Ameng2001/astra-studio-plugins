@@ -36,6 +36,32 @@ from ops_model import OpsModel, tco
 from standard_pack import StandardPack
 
 
+def publish_lark(files: list[Path], folder: str) -> list[str]:
+    """把生成的表格导入飞书文件夹，成为可在线查看的表格。
+
+    **计算书是命令的产物，不是维护对象。** 它每一格都能从 BOM × 标准包重算出来，
+    所以放飞书上只为了看和分享 —— 像 PDF 一样是快照。重跑覆盖同名文件即可。
+
+    早先做过一版「计算书 Base」，把 1763 行明细复制一份到飞书维护。那是错的：
+    飞书的关联字段只能在同一个 Base 内用（`link_table` 吃的是 base 内作用域的
+    table_id），跨 Base 引用 BOM 做不到，于是只能复制 —— 一份数据两处维护，
+    改了名字两边就静默分叉。维护面必须收敛在 BOM。
+    """
+    import subprocess
+    out = []
+    for f in files:
+        r = subprocess.run(
+            ["lark-cli", "drive", "+import", "--file", str(f), "--type", "sheet",
+             "--folder-token", folder, "--name", f.stem, "--as", "user",
+             "--format", "json"],
+            capture_output=True, text=True)
+        ok = '"ok": true' in r.stdout or '"ok":true' in r.stdout
+        # 导入类命令会在 JSON 前打进度行，解析崩不代表失败 —— 只看 ok 标记
+        out.append(f"{'✓' if ok else '✗'} {f.name}"
+                   + ("" if ok else f"  {(r.stdout or r.stderr)[:160]}"))
+    return out
+
+
 def emit_procurement_list(result: dict[str, Any], pack: StandardPack,
                           path: Path) -> None:
     """01 建设期采购清单 —— 按区域标准的科目树组织。"""
@@ -137,7 +163,6 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
     items, _ = engine.in_scope()
     method = deal.counting_method
     size_f = pack.factor("size_change", method)
-    reuse_f = pack.factor("reuse", deal.reuse_level)
 
     wb = openpyxl.Workbook()
 
@@ -146,7 +171,6 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
     ws.append(["参数", "取值", "出处"])
     for label, dotted in [
         ("规模变更因子", f"factors.size_change.values.{method}"),
-        ("复用度调整因子", f"factors.reuse.values.{deal.reuse_level}"),
         ("软件开发生产率（人时/FP）", "rates.productivity_hours_per_fp"),
         ("人月折算系数（人时/人月）", "rates.man_hours_per_month"),
         ("基准人月费率（元/人月）", "rates.base_man_month_rate"),
@@ -159,17 +183,21 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
 
     det = wb.create_sheet("功能点明细")
     det.append(["条目ID", "系统", "名称", "类型", "未调整功能点", "规模变更因子",
-                "复用度因子", "应用类型因子", "调整后功能点", "复算公式"])
+                "产品成熟度", "复用度档位", "复用度因子", "应用类型因子",
+                "调整后功能点", "复算公式"])
     for i in items:
         if i.cls not in FP_COUNTED_CLASSES or not i.nesma:
             continue
         w = pack.fp_weight(method, i.nesma.type)
         app_f = pack.factor("app_type", i.app_type or "业务处理")
+        # 复用度按条目的 maturity 经标准包词表解析 —— 不是全表一个值
+        lvl = engine.reuse_level(i)
+        reuse_f = pack.factor("reuse", lvl)
         afp = engine.profile.adjusted_fp(
             w, pack=pack, counting_method=method,
-            reuse_level=deal.reuse_level, app_type=i.app_type or "业务处理")
+            reuse_level=lvl, app_type=i.app_type or "业务处理")
         det.append([i.id, i.path.system, i.name, i.nesma.type, w,
-                    size_f, reuse_f, app_f, afp,
+                    size_f, i.maturity, lvl, reuse_f, app_f, afp,
                     f"={w}*{size_f}*{reuse_f}*{app_f}"])
 
     smy = wb.create_sheet("测算汇总")
@@ -412,6 +440,8 @@ def main() -> None:
     ap.add_argument("--delivery-plan", type=Path, help="本商机采用的交付方案")
     ap.add_argument("--scenarios", type=Path, nargs="*", default=[],
                     help="用于 TCO 对比的场景预设")
+    ap.add_argument("--publish-lark", metavar="FOLDER_TOKEN",
+                    help="把生成的 xlsx 导入飞书文件夹供在线查看（快照，非维护对象）")
     args = ap.parse_args()
 
     bom = Bom.load(args.bom)
@@ -498,6 +528,9 @@ def main() -> None:
           f"其他 ¥{t['other_fees']:,.2f}")
     print(f"  建设期合计 ¥{t['construction_total']:,.2f}")
     print(f"  输出 → {out}")
+    if args.publish_lark:
+        for line in publish_lark(sorted(out.glob("*.xlsx")), args.publish_lark):
+            print(f"  飞书 {line}")
 
 
 if __name__ == "__main__":
