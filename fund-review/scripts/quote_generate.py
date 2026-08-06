@@ -504,7 +504,12 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
 
     # 开发类别系数 —— 人月费率 = 基准人月费率 × 本系数。清单里印着
     # ¥26,009.50 与 ¥23,645，中间这个 1.1 此前哪儿都没有，评审只能反推。
-    dev_tbl = (pack.data.get("factors", {}).get("dev_category", {}).get("values") or {})
+    # 广东 dev_category.values 为空且 absent_in_standard —— 人月费率固定，
+    # 不按开发类别调。此前这里 `if dev_tbl:` 直接跳过，rows 里就没有区间，
+    # 下游 emit_whatif 取 prows['dev_first'] 当场 KeyError。
+    # **本标准没有这个维度，也要说出来**，否则读的人会以为是漏印。
+    dev_node = pack.data.get("factors", {}).get("dev_category", {}) or {}
+    dev_tbl = dev_node.get("values") or {}
     if dev_tbl:
         s.blank()
         s.note("　【开发类别调整系数】人月费率 = 基准人月费率 × 本系数")
@@ -515,6 +520,11 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
                  "单位/说明": "本项目用到" if k in _dev_cats_used(result) else ""},
                 clause=str(pack.value("factors.dev_category")[1]))
         rows["dev_last"] = s._next - 1
+    else:
+        s.blank()
+        s.note(f"　【开发类别调整系数】**本标准无此维度** —— "
+               f"{dev_node.get('note') or '人月费率不按开发类别调整'}。"
+               f"03_试算 的人月费率直接取基准人月费率。")
 
     weights, w_cite = pack.value(f"fp_counting.{method}.weights")
     s.blank()
@@ -564,6 +574,9 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
     prod = pack.rate("productivity_hours_per_fp")
     base_rate = pack.rate("base_man_month_rate")
 
+    # 维度按**标准包实际有什么**来定，不预设山东的形状 ——
+    # 广东人月费率固定 24000，没有开发类别这个维度，硬留一列就是假的。
+    has_dev = "dev_first" in prows
     s = gov_sheet.GovSheet(
         wb, "03_试算", title=f"{result['deal']}　造价试算",
         subtitle="**绿色格全部为活公式**，参数取自 02_计价参数 的 C 列 —— "
@@ -572,10 +585,12 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
         columns=[
             gov_sheet.Col("子系统", width=38),
             gov_sheet.Col("应用类型", width=14, cell_role="input"),
-            gov_sheet.Col("开发类别", width=20, cell_role="input"),
+            *([gov_sheet.Col("开发类别", width=20, cell_role="input")]
+              if has_dev else []),
             gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
             gov_sheet.Col("应用类型因子", "rate", width=12, cell_role="calc"),
-            gov_sheet.Col("开发类别系数", "rate", width=12, cell_role="calc"),
+            *([gov_sheet.Col("开发类别系数", "rate", width=12, cell_role="calc")]
+              if has_dev else []),
             gov_sheet.Col("调整后功能点", "fp", width=13, sum=True,
                           cell_role="calc"),
             gov_sheet.Col("工作量（人月）", "fp", width=13, sum=True,
@@ -592,6 +607,7 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
                and i.path.system == sysrow["system"]]
         app_name = (its[0].app_type or "业务处理") if its else "业务处理"
         app_f = pack.factor("app_type", app_name)
+        app_local = pack.factor_label("app_type", app_name)
         dev_f = round(sysrow["man_month_rate"] / base_rate, 4)
         row_no = s._next                   # 本行将写在哪一行
         ufp = sysrow["ufp"]
@@ -603,24 +619,26 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
         sum_cost += cost
 
         C = {n: get_col_letter(s, n) for n in
-             ("应用类型", "开发类别", "未调整功能点", "应用类型因子",
-              "开发类别系数", "调整后功能点", "工作量（人月）", "人月费率（元）")}
+             (["应用类型", "未调整功能点", "应用类型因子", "调整后功能点",
+               "工作量（人月）", "人月费率（元）"]
+              + (["开发类别", "开发类别系数"] if has_dev else []))}
         # 系数不写死，从 02 的系数表查 —— 样例表是 IF(C2=…)，我们用 VLOOKUP。
         # 写死的话「把平台能力从智能信息改成业务处理」这种试算就做不了：
         # 改了名字系数不动，等于什么都没试。
         app_rng = (f"{P}!$B${prows['app_first']}:$C${prows['app_last']}")
-        dev_rng = (f"{P}!$B${prows['dev_first']}:$C${prows['dev_last']}")
         f_app = (f'=VLOOKUP("　应用类型 · "&{C["应用类型"]}{row_no},{app_rng},2,FALSE)')
-        f_dev = (f'=VLOOKUP("　开发类别 · "&{C["开发类别"]}{row_no},{dev_rng},2,FALSE)')
-        s.row({
-            "子系统": sysrow["system"], "应用类型": app_name,
-            "开发类别": sysrow["dev_category"], "未调整功能点": ufp,
+        if has_dev:
+            dev_rng = f"{P}!$B${prows['dev_first']}:$C${prows['dev_last']}"
+            f_dev = (f'=VLOOKUP("　开发类别 · "&{C["开发类别"]}{row_no},'
+                     f'{dev_rng},2,FALSE)')
+        vals = {
+            "子系统": sysrow["system"],
+            # 写**本标准自己的称谓**：BOM 存「智能信息」，广东标准叫「人工智能」，
+            # 写 BOM 的词 VLOOKUP 会在广东的表里查不到。
+            "应用类型": app_local, "未调整功能点": ufp,
             "应用类型因子": gov_sheet.formula(
                 f_app, app_f, app_f,
                 where=f"[03_试算] {sysrow['system'][:20]} 应用类型因子"),
-            "开发类别系数": gov_sheet.formula(
-                f_dev, dev_f, dev_f,
-                where=f"[03_试算] {sysrow['system'][:20]} 开发类别系数"),
             "调整后功能点": gov_sheet.formula(
                 f"=ROUND({C['未调整功能点']}{row_no}*{a_size}*{a_reuse}"
                 f"*{C['应用类型因子']}{row_no},2)",
@@ -631,7 +649,8 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
                 effort, sysrow["effort_man_months"], rel_tol=0.001,
                 where=f"[03_试算] {sysrow['system'][:20]} 工作量"),
             "人月费率（元）": gov_sheet.formula(
-                f"=ROUND({a_rate}*{C['开发类别系数']}{row_no},2)",
+                (f"=ROUND({a_rate}*{C['开发类别系数']}{row_no},2)" if has_dev
+                 else f"={a_rate}"),
                 rate, sysrow["man_month_rate"],
                 where=f"[03_试算] {sysrow['system'][:20]} 人月费率"),
             "软件开发费（元）": gov_sheet.formula(
@@ -639,7 +658,13 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
                 cost, sysrow["cost"], rel_tol=0.001,
                 where=f"[03_试算] {sysrow['system'][:20]} 软件开发费"),
             "与 00 汇总差（元）": round(cost - sysrow["cost"], 2),
-        })
+        }
+        if has_dev:
+            vals["开发类别"] = sysrow["dev_category"]
+            vals["开发类别系数"] = gov_sheet.formula(
+                f_dev, dev_f, dev_f,
+                where=f"[03_试算] {sysrow['system'][:20]} 开发类别系数")
+        s.row(vals)
 
     s.total("试算合计")
     eng = result["software_dev"]["total"]
