@@ -228,8 +228,12 @@ def emit_procurement_list(result: dict[str, Any], pack: StandardPack,
     # 这一笔（本项目 ¥40,000）。`total(expect=)` 把这个洞照了出来。
     impl = result.get("implementation") or {"rows": []}
     if impl["rows"]:
+        # 说明按**实际形态**生成，不写死「SaaS/订阅」—— 换成全私有化后
+        # 实施费来自 D4 模型私有化部署调试，文案还写着 SaaS 就是在说假话。
         s.group("三、实施费用",
-                {"计算依据": f"{len(impl['rows'])} 项，SaaS/订阅形态的建设期接入实施"},
+                {"计算依据": f"{len(impl['rows'])} 项："
+                             + "、".join(f"{x['mode_name']}（{x['mode']}）"
+                                        for x in impl["rows"])},
                 clause="三.(二) p.8-9")
         for r in impl["rows"]:
             # 只写工作量与用途，**不写 internal-cost-model 里的人天单价**

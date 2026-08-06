@@ -361,13 +361,23 @@ class CostingEngine:
 
             price = i.spec.get("reference_unit_price_yuan")
             qty = i.spec.get("qty") or 0
+            # 举证句算一次，明细行与「待询价」节共用。此前两处各取一次
+            # spec.pricing_basis，改了一处另一处照旧 —— 同一条标的在同一份
+            # 清单里给出两种举证要求。
+            basis = (i.spec.get("pricing_basis", "")
+                     if not str(i.spec.get("pricing_basis", "")).startswith("TODO(询价)")
+                     else self.pack.evidence_sentence(
+                         self.pack.evidence_for_subject(subject), subject))
             row = {"id": i.id, "name": i.name, "system": i.path.system,
                    "subject_detail": i.spec.get("subject_detail", ""),
                    "pricing_model": i.spec.get("pricing_model", ""),
                    "unit": i.spec.get("unit", ""), "qty": qty,
                    "reference_unit_price": price,
                    "amount": xlround((price or 0) * qty, 2),
-                   "pricing_basis": i.spec.get("pricing_basis", ""),
+                   # 举证要求由**标准包**按科目给出，不用条目里那句复制文本 ——
+                   # 那句写的是软件产品/硬件的要求（三家不同品牌+加盖公章），
+                   # 而数据模型要的是人月工作量举证。换省时要求也不同。
+                   "pricing_basis": basis,
                    "evidence_required": i.spec.get("evidence_required", []),
                    "legacy_reference_yuan": (i.legacy_quote or {}).get("quote_yuan")}
             g = groups.setdefault(subject, {"subject": subject, "rows": [],
@@ -377,7 +387,7 @@ class CostingEngine:
             if price is None:
                 g["pending_count"] += 1
                 pending.append({"id": i.id, "name": i.name, "subject": subject,
-                                "note": i.spec.get("pricing_basis", "待询价"),
+                                "note": basis or "待询价",
                                 "legacy_reference_yuan": row["legacy_reference_yuan"]})
             else:
                 g["total"] += row["amount"]

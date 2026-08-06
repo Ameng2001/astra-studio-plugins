@@ -176,6 +176,52 @@ class StandardPack:
         node = self.data.get("factors", {}).get(group, {})
         return node.get("aliases", {}).get(key, key)
 
+    #: 科目号前缀 → procurement_evidence 的键。举证要求是**标准的属性**，
+    #: 不是标的的属性 —— 同一个模型在山东要人月工作量举证、在广东按成品软件
+    #: 租赁询价，要求完全不同。写死在 BOM 条目里就等于把区域规则塞进了
+    #: 地域无关的那一层。
+    _EVIDENCE_BY_SUBJECT = [
+        ("三.(二)2", "data_model"), ("三(二)2", "data_model"),
+        ("三.(二)1", "software_product"), ("三(二)1", "software_product"),
+        ("三.(三)", "hardware"), ("三(三)", "hardware"),
+    ]
+
+    def evidence_for_subject(self, subject: str | None) -> dict[str, Any] | None:
+        """该科目在本标准下的询价举证要求。认不出科目返回 None。
+
+        返回 None 与返回空 dict 是两回事：前者是「本标准没规定」，
+        后者会被误读成「不需要举证」。调用侧必须区分。
+        """
+        if not subject:
+            return None
+        ev = self.data.get("procurement_evidence") or {}
+        for prefix, key in self._EVIDENCE_BY_SUBJECT:
+            if subject.startswith(prefix) and key in ev:
+                return {**ev[key], "_key": key}
+        return None
+
+    @staticmethod
+    def evidence_sentence(ev: dict[str, Any] | None, subject: str | None) -> str:
+        """把举证要求渲染成一句给商务看的话。
+
+        此前 70 条采购标的的 `pricing_basis` 是同一句复制文本
+        「三家同级别不同品牌厂商加盖公章的询价报价单」—— 那是
+        **软件产品/硬件**的要求。数据模型在山东既不要求加盖公章、也不按品牌，
+        它要的是「预计搭建模型所需投入工作量（采用人月计量）」。
+        让商务去为自研模型找三家不同品牌报价，是让人做一件标准没要求、
+        且做不到的事。
+        """
+        if ev is None:
+            return (f"TODO(询价)：本标准未规定「{subject}」的询价举证要求，"
+                    f"须向主管部门确认" if subject else "TODO(询价)：科目未定")
+        bits = [f"须提供 {ev.get('quotes_required', 3)} 份询价报价单"]
+        if ev.get("sealed"):
+            bits.append("**加盖公章**")
+        fields = ev.get("required_fields") or []
+        if fields:
+            bits.append("应载明：" + "、".join(fields))
+        return "TODO(询价)：" + "；".join(bits)
+
     def fp_weight(self, method: str, ftype: str) -> int:
         weights, _ = self.value(f"fp_counting.{method}.weights")
         if ftype not in weights:
