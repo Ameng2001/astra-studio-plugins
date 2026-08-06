@@ -30,7 +30,7 @@ from typing import Any
 
 import openpyxl
 
-import excel_styler
+import gov_sheet
 from bom_schema import Bom, Vocabulary, is_fp_counted
 from costing_engine import CostingEngine, DealConfig, snapshot
 from nesma_weights import xlround
@@ -172,16 +172,105 @@ def make_lock(bl: dict[str, Any], bom: Bom, pack: StandardPack,
 
 
 def emit_xlsx(bl: dict[str, Any], pack: StandardPack, path: Path) -> None:
-    wb = openpyxl.Workbook()
+    """区域基准清单 —— 与第三层送审包同一套结构规范（`gov_sheet`）。
 
-    ws = wb.active
-    ws.title = "参数"
-    ws.append([f"{pack.pack_id} 区域基准 · BOM {bl['bom_version']}"])
-    ws.append([bl["standard_doc"]])
-    ws.append([])
-    ws.append(["参数", "取值", "出处"])
+    这两份表是同一批人对着看的。此前第二层还留着第三层已经修掉的四个毛病：
+    `类型分布` 是 dict 的 repr、`产品成熟度` 是 `existing`/`new`、
+    复算公式漏 `ROUND` 差半分、明细没有合计行。
+    """
     method = bl["counting_method"]
-    for label, dotted in [
+    sw = bl["software_dev"]
+    sub = (f"{bl['standard_doc']}　|　BOM {bl['bom_version']}　|　"
+           f"标准包 {pack.pack_id}　|　计数方法 {method}")
+    wb = gov_sheet.new_workbook()
+
+    smy = gov_sheet.GovSheet(
+        wb, "00_基准汇总", title=f"{pack.pack_id} 区域基准 · BOM {bl['bom_version']}",
+        subtitle=sub + "　|　**含占位条目**，是否计入报价由第三层决定",
+        rollup=True,                 # 它汇总 01_功能点明细，不能与之相加
+        columns=[
+            gov_sheet.Col("子系统", width=40),
+            gov_sheet.Col("开发类别", width=18),
+            gov_sheet.Col("条目数", "int", width=9, sum=True),
+            gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True, role="fp"),
+            gov_sheet.Col("开发工作量（人月）", "fp", width=15, sum=True),
+            gov_sheet.Col("人月费率（元）", "money", width=15),
+            gov_sheet.Col("软件开发费用（元）", "money", width=17, sum=True,
+                          role="total"),
+            gov_sheet.Col("功能点类型分布", width=30),
+        ])
+    for s in sw["systems"]:
+        smy.row({"子系统": s["system"], "开发类别": s["dev_category"],
+                 "条目数": s["items"], "未调整功能点": s["ufp"],
+                 "调整后功能点": s["afp"],
+                 "开发工作量（人月）": s["effort_man_months"],
+                 "人月费率（元）": s["man_month_rate"],
+                 "软件开发费用（元）": s["cost"],
+                 "功能点类型分布": gov_sheet.flatten_counts(s["by_type"])})
+    smy.total("合计", expect={"未调整功能点": sw["ufp_total"],
+                              "调整后功能点": sw["afp_total"],
+                              "软件开发费用（元）": sw["total"]})
+    smy.finish()
+
+    det = gov_sheet.GovSheet(
+        wb, "01_功能点明细", title=f"{pack.pack_id} 区域基准 · 功能点明细",
+        subtitle=sub + "　|　「复算式」为活公式，可现场点开核验",
+        columns=[
+            gov_sheet.Col("条目编号", width=18),
+            gov_sheet.Col("子系统", width=34),
+            gov_sheet.Col("一级模块", width=20),
+            gov_sheet.Col("功能点名称", width=34, role="detail"),
+            gov_sheet.Col("功能点类型", width=11),
+            gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("规模变更因子", "rate", width=13),
+            gov_sheet.Col("产品成熟度", width=12),
+            gov_sheet.Col("复用度档位", width=14),
+            gov_sheet.Col("复用度因子", "rate", width=12),
+            gov_sheet.Col("应用类型", width=14),
+            gov_sheet.Col("本标准称谓", width=16),
+            gov_sheet.Col("应用类型因子", "rate", width=13),
+            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True, role="fp"),
+            gov_sheet.Col("占位条目", width=10),
+            gov_sheet.Col("复算式", "fp", width=16),
+        ])
+    n_ph = 0
+    for d in bl["detail"]:
+        prod = d["ufp"] * d["size_change"] * d["reuse_factor"] * d["app_factor"]
+        # 公式带 ROUND 才与引擎的 xlround 同语义 —— 裸乘积差半分（9.075 vs 9.08）
+        if abs(xlround(prod, 2) - d["afp"]) > 0.0001:
+            raise gov_sheet.GovSheetError(
+                f"{d['id']}：复算式与引擎值不符 —— ROUND({prod:.6f}, 2) = "
+                f"{xlround(prod, 2)}，引擎给 {d['afp']}")
+        n_ph += bool(d["placeholder"])
+        det.row({"条目编号": d["id"], "子系统": d["system"], "一级模块": d["l1"],
+                 "功能点名称": d["name"], "功能点类型": d["type"],
+                 "未调整功能点": d["ufp"], "规模变更因子": d["size_change"],
+                 "产品成熟度": gov_sheet.label(d["maturity"]),
+                 "复用度档位": d["reuse_level"], "复用度因子": d["reuse_factor"],
+                 "应用类型": d["app_type"], "本标准称谓": d["app_type_local"],
+                 "应用类型因子": d["app_factor"], "调整后功能点": d["afp"],
+                 "占位条目": "是" if d["placeholder"] else "",
+                 "复算式": f'=ROUND({d["ufp"]}*{d["size_change"]}'
+                           f'*{d["reuse_factor"]}*{d["app_factor"]},2)'})
+    # 第二层不做交付形态过滤，所以明细与汇总**必须逐位相等** ——
+    # 这正是与第三层的分野：那里两者相差 917.08 FP（订阅形态列而不计），
+    # 这里差一分钱都说明基准自己算岔了。锁死比写句说明有用。
+    det.total("合计", expect={"未调整功能点": sw["ufp_total"],
+                              "调整后功能点": sw["afp_total"]})
+    det.note(f"　口径说明：本表 {det.seq_count} 条，其中 {n_ph} 条为占位"
+             f"（「已知的未知」，基准要完整）。合计与 00_基准汇总逐位一致 —— "
+             f"第二层不判交付形态，是否计入报价由第三层（quote_generate）裁定。")
+    det.finish()
+
+    par = gov_sheet.GovSheet(
+        wb, "02_计价参数", title=f"{pack.pack_id} 区域基准 · 计价参数与依据",
+        subtitle="每个取值均标注标准原文页码与条款，供逐项核对",
+        columns=[gov_sheet.Col("参数", width=28),
+                 gov_sheet.Col("取值", width=34),
+                 gov_sheet.Col("标准出处", width=40)],
+        clause_required=True, clause_name="标准出处")
+    for lb, dotted in [
         ("规模变更因子", f"factors.size_change.values.{method}"),
         ("软件开发生产率（人时/FP）", "rates.productivity_hours_per_fp"),
         ("人月折算系数（人时/人月）", "rates.man_hours_per_month"),
@@ -189,44 +278,48 @@ def emit_xlsx(bl: dict[str, Any], pack: StandardPack, path: Path) -> None:
     ]:
         try:
             v, c = pack.value(dotted)
-            ws.append([label, v, str(c)])
+            par.row({"参数": lb, "取值": v}, clause=str(c))
         except Exception as e:      # 本包没有这个维度（如广东无开发类别）
-            ws.append([label, "—", f"本标准无此项：{e}"])
+            par.row({"参数": lb, "取值": "—"}, clause=f"本标准无此项：{e}")
     weights, w_cite = pack.value(f"fp_counting.{method}.weights")
-    ws.append(["功能点权重", "、".join(f"{k}={n}" for k, n in weights.items()), str(w_cite)])
-
-    det = wb.create_sheet("功能点明细")
-    det.append(["条目ID", "系统", "一级模块", "名称", "类型", "未调整功能点",
-                "规模变更因子", "产品成熟度", "复用度档位", "复用度因子",
-                "应用类型", "本标准称谓", "应用类型因子", "调整后功能点", "占位", "复算公式"])
-    for d in bl["detail"]:
-        det.append([d["id"], d["system"], d["l1"], d["name"], d["type"], d["ufp"],
-                    d["size_change"], d["maturity"], d["reuse_level"], d["reuse_factor"],
-                    d["app_type"], d["app_type_local"], d["app_factor"], d["afp"],
-                    "是" if d["placeholder"] else "",
-                    f'={d["ufp"]}*{d["size_change"]}*{d["reuse_factor"]}*{d["app_factor"]}'])
-
-    smy = wb.create_sheet("基准汇总")
-    smy.append(["系统", "开发类别", "条目数", "未调整功能点", "调整后功能点",
-                "开发工作量（人月）", "人月费率（元）", "软件开发费用（元）", "类型分布"])
-    for s in bl["software_dev"]["systems"]:
-        smy.append([s["system"], s["dev_category"], s["items"], s["ufp"], s["afp"],
-                    s["effort_man_months"], s["man_month_rate"], s["cost"], str(s["by_type"])])
-    sw = bl["software_dev"]
-    smy.append(["合计", "", "", sw["ufp_total"], sw["afp_total"], sw["effort_total"],
-                "", sw["total"], ""])
+    par.row({"参数": "功能点权重",
+             "取值": "、".join(f"{k}={n}" for k, n in weights.items())},
+            clause=str(w_cite))
+    par.finish()
 
     if bl["purchase_subjects"]:
-        pu = wb.create_sheet("采购标的")
-        pu.append(["条目ID", "系统", "名称", "类别", "科目", "科目号",
-                   "计价方式", "单位", "数量", "参考单价"])
+        pu = gov_sheet.GovSheet(
+            wb, "03_采购标的", title=f"{pack.pack_id} 区域基准 · 采购标的",
+            subtitle="**只列不定价、不判交付形态** —— 形态是第三层的事",
+            columns=[
+                gov_sheet.Col("条目编号", width=18),
+                gov_sheet.Col("子系统", width=28),
+                gov_sheet.Col("名称", width=34, role="detail"),
+                gov_sheet.Col("类别", width=12),
+                gov_sheet.Col("科目", width=30),
+                gov_sheet.Col("科目号", width=14),
+                gov_sheet.Col("计价方式", width=14),
+                gov_sheet.Col("单位", width=8),
+                gov_sheet.Col("数量", "int", width=9),
+                gov_sheet.Col("参考单价（元）", "money", width=15),
+            ])
+        n_nop = 0
         for r in bl["purchase_subjects"]:
-            pu.append([r["id"], r["system"], r["name"], r["class"], r["subject"],
-                       r["subject_code"], r["pricing_model"], r["unit"], r["qty"],
-                       r["reference_unit_price_yuan"]])
+            price = r["reference_unit_price_yuan"]
+            n_nop += price is None
+            pu.row({"条目编号": r["id"], "子系统": r["system"], "名称": r["name"],
+                    "类别": r["class"], "科目": r["subject"],
+                    "科目号": r["subject_code"],
+                    "计价方式": gov_sheet.label(r["pricing_model"] or "待定"),
+                    "单位": r["unit"], "数量": r["qty"],
+                    # 无价的写「待询价」而不是留空 —— ¥0 与「没有价格」
+                    # 必须能区分，这是本项目反复吃亏的地方
+                    "参考单价（元）": price if price is not None else "待询价"})
+        pu.note(f"　共 {pu.seq_count} 项，其中 {n_nop} 项无参考单价（显示「待询价」）。"
+                f"**空白与 ¥0 是两回事** —— 前者是价格未到位，后者是真的不要钱。")
+        pu.finish()
 
-    wb.save(path)
-    excel_styler.style_workbook(path)
+    gov_sheet.save(wb, path)
 
 
 def emit_citations(pack: StandardPack, path: Path) -> None:

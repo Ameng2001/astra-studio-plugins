@@ -1,4 +1,4 @@
-"""gov_sheet — 送审 Excel 的**结构**规范（`excel_styler` 只管长相，这里管骨架）。
+"""gov_sheet — 送审 Excel 的**结构**规范（取代已归档的 `excel_styler`）。
 
 ## 规范从哪来
 
@@ -20,7 +20,7 @@ docx，已过评审）反推：
 
 —— Python dict 的 repr 直接落进了要报给财政评审的公文。同一张表里
 `产品成熟度` 列是 `existing` / `new`，没翻译的枚举。这两个都不是样式问题，
-**再漂亮的配色也盖不住**，而 `excel_styler` 那种事后遍历改字体的做法
+**再漂亮的配色也盖不住**，而事后遍历改字体的做法（原 `excel_styler`）
 看不见它们。
 
 所以这里把「什么能进单元格」变成写入时的硬约束：
@@ -49,7 +49,7 @@ class GovSheetError(RuntimeError):
     """送审表结构违规 —— 硬失败，不静默产出不合规的公文。"""
 
 
-# ---- 视觉常量（与 excel_styler 对齐，取自送审包实测）----------------------
+# ---- 视觉常量（沿用原 excel_styler，取自送审包实测）--------------------
 
 BODY = "微软雅黑"
 HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
@@ -96,6 +96,11 @@ ENUM_LABELS: dict[str, str] = {
     # 计价模型
     "onetime": "一次性", "annual": "按年", "usage": "按量",
 }
+
+#: `parse_quote.classify_sheet` 判成这些 kind 的表，下游求总额时会跳过。
+#: 与 `quote_shape.NON_QUOTE_SHEET_KINDS` 同源 —— 汇总表不能与被它汇总的
+#: 明细一起相加。
+NON_SUMMABLE_SHEET_KINDS = {"summary"}
 
 #: 这些裸标识符是**编号不是枚举**，允许原样写入。
 _ID_ALLOW = re.compile(r"^(?:[A-Z]+[.\-_][\w.\-]+|[A-Z]\d+|v?\d[\w.\-]*)$")
@@ -161,18 +166,60 @@ def flatten_counts(d: dict[str, Any], sep: str = " / ") -> str:
     return sep.join(f"{k} {v}" for k, v in d.items())
 
 
+#: 本进程里所有带 `role` 的列：(sheet 名, 列名, 角色)。
+#: 由 `assert_roles_parseable()` 结算 —— 见那个函数的注释。
+_ROLE_REGISTRY: list[tuple[str, str, str]] = []
+
+
 @dataclass
 class Col:
-    """一列的规格。`fmt` 决定对齐与数字格式，`sum` 决定是否进合计行。"""
+    """一列的规格。
+
+    `fmt` 决定对齐与数字格式，`sum` 决定是否进合计行，
+    `role` 声明这一列在**下游解析**时扮演的语义角色。
+    """
     name: str
     fmt: str = "text"
     width: int | None = None
     sum: bool = False
+    role: str | None = None
 
     def __post_init__(self) -> None:
         if self.fmt not in FMT:
             raise GovSheetError(f"列 {self.name!r} 的 fmt={self.fmt!r} 未知；"
                                 f"可选：{sorted(FMT)}")
+
+
+def assert_roles_parseable() -> None:
+    """**我们自己生成的表，我们自己的解析器必须认得。**
+
+    生成端（这里的 `Col` 名字）和解析端（`quote_shape.COLUMN_ROLES` 的候选
+    列名）此前是两份各自维护的词表，中间没有任何联系。改了一边不会有人发现 ——
+    实测：把功能点明细的列名改成送审格式后，`build_fp_table` 一律从「人天」
+    倒推 FP，而新表没有人天列，于是 `total_fp` 归零、报告照印，命令退出 0。
+    那是本项目「静默出 0」家族的第六种写法。
+
+    单靠一条测试挡不住：测试要有人记得跑，而且得配齐 BOM 与标准包。
+    所以把结算放在**每次真实生成的末尾** —— 数据在哪，检查就在哪。
+    """
+    import quote_shape
+    bad = []
+    for sheet, name, role in _ROLE_REGISTRY:
+        if role not in quote_shape.COLUMN_ROLES:
+            bad.append(f"[{sheet}] 列「{name}」声明的角色 {role!r} 不存在；"
+                       f"现有：{sorted(quote_shape.COLUMN_ROLES)}")
+        elif name not in quote_shape.COLUMN_ROLES[role]:
+            bad.append(
+                f"[{sheet}] 列「{name}」声明角色 {role!r}，"
+                f"但 quote_shape.COLUMN_ROLES[{role!r}] 认不出这个列名\n"
+                f"      它认的是：{quote_shape.COLUMN_ROLES[role]}")
+    if bad:
+        raise GovSheetError(
+            "生成的表下游解析不了 —— 改了列名却没同步解析器：\n  "
+            + "\n  ".join(bad)
+            + "\n  修法：把列名加进 quote_shape.COLUMN_ROLES 的对应角色。"
+              "\n  **不要把 role 删掉了事** —— 那只是让检查闭嘴，"
+              "下游照样静默出 0。")
 
 
 @dataclass
@@ -194,6 +241,9 @@ class GovSheet:
     clause_required: bool = False
     clause_name: str = "标准条款"
     seq: bool = True
+    #: 本表是**别处金额的再汇总**（如 Z00 总报价、Z02 测算汇总）。
+    #: 下游求总额时必须跳过它，否则同一笔钱算两遍。见 `_assert_rollup_detected`。
+    rollup: bool = False
 
     ws: Any = field(init=False, default=None)
     header_row: int = field(init=False, default=0)
@@ -211,6 +261,9 @@ class GovSheet:
             cols.append(Col(self.clause_name, "text", width=30))
         self.columns = cols
         self._by_name = {c.name: i + 1 for i, c in enumerate(cols)}
+        for c in cols:
+            if c.role:
+                _ROLE_REGISTRY.append((self.name, c.name, c.role))
 
         r = 1
         self.ws.cell(r, 1, self.title).font = TITLE_FONT
@@ -233,6 +286,35 @@ class GovSheet:
         self.ws.row_dimensions[r].height = 28
         self._first_data = r + 1
         self._next = r + 1
+        self._assert_rollup_detected()
+
+    def _assert_rollup_detected(self) -> None:
+        """汇总表必须能被 `parse_quote` 认出来 —— 直接问它，不靠约定。
+
+        `classify_sheet` 是按**表名**判 summary 的（含「汇总」/「总表」）。
+        我们的 `00_测算汇总` 恰好命中，所以求总额时被跳过、¥1053 万没有被
+        重复计入。但那是**碰巧对**：把这张表改名叫「软件开发费构成」，
+        同一笔钱就会悄悄算两遍，而且没有任何地方会报错。
+
+        与其在这里复刻一遍它的命名约定（那就成了第二份要同步的规则），
+        不如把真正的判定函数拿来当场跑一遍。写的人立刻知道改名的后果。
+        """
+        if not self.rollup:
+            return
+        try:
+            from parse_quote import classify_sheet
+        except ImportError:                     # 单独用 gov_sheet 时不强求
+            return
+        header = [c.name for c in self.columns]
+        kind = classify_sheet(self.name, header)
+        if kind not in NON_SUMMABLE_SHEET_KINDS:
+            raise GovSheetError(
+                f"[{self.name}] 声明 rollup=True，但 parse_quote.classify_sheet "
+                f"把它判成 {kind!r} 而不是「汇总」。\n"
+                f"  后果：下游求总额时会把这张表的金额与被它汇总的明细表**算两遍**，"
+                f"且不报错。\n"
+                f"  修法：表名里保留「汇总」或「总表」二字"
+                f"（这正是 classify_sheet 的判据），或改 classify_sheet。")
 
     # ---- 写行 ----
 

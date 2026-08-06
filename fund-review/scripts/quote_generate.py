@@ -31,7 +31,6 @@ from typing import Any
 
 import openpyxl
 
-import excel_styler
 import gov_sheet
 from bom_schema import Bom, is_fp_counted
 from costing_engine import (PLACEHOLDER_TAG, CostingEngine, DealConfig,
@@ -140,6 +139,19 @@ BASE_LABELS = {
 }
 
 
+def _short_name(deal: str, limit: int = 12) -> str:
+    """从商机全称取一个够短的项目简称，用于送审文件名。
+
+    截断而非硬编码映射 —— 这是个显示问题，不该要求每个商机都先登记简称；
+    真要精确控制，传 `--doc-prefix`。
+    """
+    s = deal.strip().replace(" ", "")
+    for sep in ("：", ":", "—", "-"):
+        if sep in s:
+            s = s.split(sep)[-1] or s
+    return s[:limit] if len(s) > limit else s
+
+
 def _subtitle(result: dict[str, Any], pack: StandardPack) -> str:
     return (f"编制依据：{pack.data['standard_doc']}　|　"
             f"BOM {result['bom_version']}　|　标准包 {pack.pack_id}　|　"
@@ -162,8 +174,8 @@ def emit_procurement_list(result: dict[str, Any], pack: StandardPack,
         subtitle=_subtitle(result, pack),
         columns=[
             gov_sheet.Col("科目", width=26),
-            gov_sheet.Col("明细", width=46),
-            gov_sheet.Col("金额（元）", "money", width=16, sum=True),
+            gov_sheet.Col("明细", width=46, role="detail"),
+            gov_sheet.Col("金额（元）", "money", width=16, sum=True, role="total"),
             gov_sheet.Col("计算依据", width=52),
         ],
         clause_required=True)
@@ -307,16 +319,17 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
     # 汇总排在明细之前 —— 评审打开文件先看钱，不该先撞上 1738 行明细。
     smy = gov_sheet.GovSheet(
         wb, "00_测算汇总", title=f"{result['deal']}　软件开发费测算汇总",
-        subtitle=sub,
+        subtitle=sub, rollup=True,   # 它汇总 01_功能点明细，不能与之相加
         columns=[
             gov_sheet.Col("子系统", width=40),
             gov_sheet.Col("开发类别", width=18),
             gov_sheet.Col("条目数", "int", width=9, sum=True),
             gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
-            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True, role="fp"),
             gov_sheet.Col("开发工作量（人月）", "fp", width=15, sum=True),
             gov_sheet.Col("人月费率（元）", "money", width=15),
-            gov_sheet.Col("软件开发费用（元）", "money", width=17, sum=True),
+            gov_sheet.Col("软件开发费用（元）", "money", width=17, sum=True,
+                          role="total"),
             gov_sheet.Col("功能点类型分布", width=30),
         ],
         clause_required=True)
@@ -342,7 +355,7 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
         columns=[
             gov_sheet.Col("条目编号", width=18),
             gov_sheet.Col("子系统", width=34),
-            gov_sheet.Col("功能点名称", width=34),
+            gov_sheet.Col("功能点名称", width=34, role="detail"),
             gov_sheet.Col("功能点类型", width=11),
             gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
             gov_sheet.Col("规模变更因子", "rate", width=13),
@@ -350,11 +363,11 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
             gov_sheet.Col("复用度档位", width=14),
             gov_sheet.Col("复用度因子", "rate", width=12),
             gov_sheet.Col("应用类型因子", "rate", width=13),
-            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True, role="fp"),
             gov_sheet.Col("复算式", "fp", width=16),
             gov_sheet.Col("交付形态", width=18),
             gov_sheet.Col("计入软件开发费", width=13),
-            gov_sheet.Col("计入开发费功能点", "fp", width=15, sum=True),
+            gov_sheet.Col("计入开发费功能点", "fp", width=15, sum=True, role="fp"),
         ],
         clause_required=True)
     n_excluded = 0
@@ -644,7 +657,7 @@ def emit_ops_list(ops_lines, violations, path: Path) -> None:
             gov_sheet.Col("名称", width=26),
             gov_sheet.Col("范围", width=30),
             gov_sheet.Col("交付形态", width=12),
-            gov_sheet.Col("年度金额（元）", "money", width=16, sum=True),
+            gov_sheet.Col("年度金额（元）", "money", width=16, sum=True, role="total"),
             gov_sheet.Col("付款对象", width=16),
             gov_sheet.Col("计入本次采购", width=12),
             gov_sheet.Col("测算依据", width=40),
@@ -751,9 +764,11 @@ def emit_summary(result: dict[str, Any], pack: StandardPack,
     s = gov_sheet.GovSheet(
         wb, "00_项目总报价汇总", title=f"{result['deal']}　项目总报价汇总",
         subtitle=_subtitle(result, pack),
+        rollup=True,                 # 它汇总 Z01~Z04，不能与之相加
         columns=[
-            gov_sheet.Col("费用大类", width=34),
-            gov_sheet.Col("金额（元）", "money", width=18, sum=True),
+            gov_sheet.Col("费用大类", width=34, role="detail"),
+            gov_sheet.Col("金额（元）", "money", width=18, sum=True,
+                          role="total"),
             gov_sheet.Col("占比", "pct", width=10),
         ],
         clause_required=True)
@@ -892,7 +907,9 @@ def main() -> None:
     # 送审包命名：`{项目简称}_{册号}_{内容}_{状态}_v{BOM版本}_{日期}.xlsx`
     # 抄自柳州送审包 —— 评审在几十份附件里靠文件名定位，`01-建设期采购清单.xlsx`
     # 既没有项目也没有版本，两个项目的附件混进一个目录就分不出来。
-    pfx = args.doc_prefix or result["deal"]
+    # 默认前缀不能直接用 deal-id：它是「山东数联数智康养业务服务体系」这类
+    # 全称，拼进文件名就是 60+ 字符。取末段的业务名做简称，够短且仍可辨认。
+    pfx = args.doc_prefix or _short_name(result["deal"])
     dt = args.doc_date or date.today().strftime("%Y%m%d")
     ver = result["bom_version"]
 
@@ -907,8 +924,9 @@ def main() -> None:
 
     emit_procurement_list(result, pack, f_pro)
     emit_fp_worksheet(bom, result, pack, deal, f_fp, delivery)
-    emit_notes(bom, result, pack, deal, out / "Z05-编制说明.md",
-               rule_violations=violations)
+    f_notes = out / gov_sheet.doc_name(pfx, "Z05", "编制说明", ver, dt,
+                                       args.doc_status).replace(".xlsx", ".md")
+    emit_notes(bom, result, pack, deal, f_notes, rule_violations=violations)
     (args.out / "deal.lock.json").write_text(
         json.dumps(lock(result, bom, pack, deal, baseline_lock),
                    ensure_ascii=False, indent=2),
@@ -968,8 +986,12 @@ def main() -> None:
         attachments.append((f_ops.name, "运营期逐项费用 + 交付方案一致性检查"))
     if f_tco.exists():
         attachments.append((f_tco.name, "各交付方式的 3 年 / 5 年 TCO 对比"))
-    attachments.append(("Z05-编制说明.md", "计数方法、参数取值与出处、假设与边界"))
+    attachments.append((f_notes.name, "计数方法、参数取值与出处、假设与边界"))
     emit_summary(result, pack, attachments, f_sum)
+
+    # 生成端与解析端的列名词表在这里对账 —— 见 gov_sheet.assert_roles_parseable。
+    # 放在全部产出之后：此时 role 注册表已收齐所有 sheet 的列。
+    gov_sheet.assert_roles_parseable()
 
     t = result["totals"]
     print(f"BOM {result['bom_version']} × {pack.pack_id} × {deal.project_type}项目")

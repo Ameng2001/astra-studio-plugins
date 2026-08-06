@@ -443,6 +443,36 @@ check("优先取调整后功能点",
 
 
 
+# --- 生成端与解析端的列名词表必须对得上 ---
+# 改列名却不同步解析器 → 下游静默出 0。gov_sheet 在每次真实生成末尾结算，
+# 这里只测机制本身。
+gs._ROLE_REGISTRY.clear()
+_, s = _sheet(columns=[gs.Col("金额（元）", "money", sum=True, role="total")])
+gs.assert_roles_parseable()                    # 「金额（元）」在 COLUMN_ROLES 里
+gs._ROLE_REGISTRY.clear()
+_, s = _sheet(columns=[gs.Col("某个新列名", "money", sum=True, role="total")])
+raises("解析器认不出的列名要报错",
+       gs.assert_roles_parseable, gs.GovSheetError, "改了列名却没同步解析器")
+gs._ROLE_REGISTRY.clear()
+_, s = _sheet(columns=[gs.Col("金额（元）", "money", role="不存在的角色")])
+raises("不存在的角色要报错", gs.assert_roles_parseable, gs.GovSheetError, "不存在")
+gs._ROLE_REGISTRY.clear()
+
+# --- 汇总表必须能被 parse_quote 认出来 ---
+# 否则它的金额会与被它汇总的明细一起相加 —— 同一笔钱算两遍，不报错。
+wb_r = gs.new_workbook()
+gs.GovSheet(wb_r, "00_测算汇总", title="T", rollup=True,
+            columns=[gs.Col("名称"), gs.Col("金额（元）", "money")])
+raises("汇总表改成认不出的名字要报错",
+       lambda: gs.GovSheet(wb_r, "00_软件开发费构成", title="T", rollup=True,
+                           columns=[gs.Col("名称"), gs.Col("金额（元）", "money")]),
+       gs.GovSheetError, "算两遍")
+# 非汇总表不受此约束
+gs.GovSheet(wb_r, "01_明细", title="T",
+            columns=[gs.Col("名称"), gs.Col("金额（元）", "money")])
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:

@@ -26,6 +26,23 @@ generate_evidence_doc / generate_optimize_report / generate_todo_checklist
 
 全部为 2026-07-27 建插件时的初始提交，此后未改动过。
 
+## 后续归档
+
+**`excel_styler`**（2026-08-06 归档）—— 被 `gov_sheet` 取代。
+
+它做的是**事后美化**：把写好的工作簿重新遍历一遍，猜出表头行、改字体、
+描边、按列名关键字猜金额列。这套办法有个盖不住的盲区 —— 它只改长相，
+看不见内容。实测同一批表里，`类型分布` 列的值是 Python dict 的 repr
+（`{'EI': 66, 'EQ': 48}`）、`产品成熟度` 列是没翻译的 `existing`，
+`excel_styler` 把它们排得整整齐齐地印进了要报财评的公文。
+
+`gov_sheet` 把约束前移到**写入时**：容器进单元格报错、裸英文枚举报错、
+明细行缺条款出处报错、合计行的活公式与引擎值对不上报错。
+样式仍在（常量直接沿用自这里），但不再是唯一的职责。
+
+`finalize_delivery.py` 里还有一行 `from excel_styler import style_workbook` ——
+两个都在本目录，一起归档，不构成活引用。
+
 ## 要复活怎么办
 
 `git mv scripts/_legacy/<name>.py scripts/`，然后**给它加入口** ——
