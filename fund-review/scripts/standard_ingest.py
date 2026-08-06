@@ -194,7 +194,8 @@ def main() -> None:
                     help="允许加载已退役的标准包 —— 仅用于历史报价复算")
     p2.add_argument("--verify-citations", action="store_true")
 
-    p4 = sub.add_parser("compare", help="同一 BOM 跨区域对比，逐因子分解差异")
+    p4 = sub.add_parser("compare",
+                        help="[已退化] 请改用 diff 两个 baseline —— 见下方提示")
     p4.add_argument("--packs", required=True, nargs=2, type=Path)
     p4.add_argument("--allow-deprecated-pack", action="store_true",
                     help="允许加载已退役的标准包 —— 仅用于历史报价复算")
@@ -216,6 +217,13 @@ def main() -> None:
         return
 
     if args.cmd == "compare":
+        # 切层之后这条路径是冗余的：第二层的 baseline.json 本身就是可比的产物，
+        # 两个 baseline 直接 diff 得到同样的结论（实测 UFP 一致 8782、
+        # 比值 0.80175），而且带版本锁、进 git、能回溯。
+        # 保留是因为它逐因子分解的输出仍好读；但新用法应走 baseline。
+        print("  ℹ 提示：切层后推荐 `baseline_build` 两次后直接 diff "
+              "baseline.json —— 那份产物带版本锁、进 git、可回溯。\n"
+              "    本命令保留是因为逐因子分解的输出好读，但它不产出可归档的东西。\n")
         r = compare_regions(args.bom, args.packs, args.modes, args.delivery_plan)
         print(f"UFP 两地{'一致' if r['ufp_equal'] else '不一致'}："
               f"{r['ufp'][0]} vs {r['ufp'][1]}"

@@ -328,7 +328,8 @@ def _procurement_notes(pur: dict[str, Any]) -> list[str]:
 
 
 def emit_notes(bom: Bom, result: dict[str, Any], pack: StandardPack,
-               deal: DealConfig, path: Path) -> None:
+               deal: DealConfig, path: Path,
+               rule_violations: list[Any] | None = None) -> None:
     """05 编制说明 —— 方法、参数出处、假设与边界。"""
     d = pack.data
     L = [f"# {result['deal']} 编制说明", "",
@@ -418,6 +419,19 @@ def emit_notes(bom: Bom, result: dict[str, Any], pack: StandardPack,
             L.append(f"- **{f['name']}**：{f['blocked_reason']}")
         L.append("")
 
+    fails = [v for v in (rule_violations or []) if v.severity == "fail"]
+    if fails:
+        # 财评看的是编制说明，不是 xlsx 里的某个 sheet。结构性违规必须在这里出现，
+        # 而且要写在「假设与边界」之前 —— 它不是假设，是本方案在本标准下不成立。
+        L += ["## ⚠️ 一致性违规（本方案在本标准下不成立）", "",
+              f"检出 {len(fails)} 条 `fail` 级违规。**送审前必须消解**，"
+              f"否则相应科目在本标准中无处落账：", "",
+              "| 规则 | 问题 |", "|---|---|"]
+        for v in fails:
+            # 违规文案里带换行会把 Markdown 表格撑破 —— 压平
+            msg = " ".join(str(v.message).split()).replace("|", "｜")
+            L.append(f"| {v.rule} | {msg} |")
+        L.append("")
     L += ["## 六、假设与边界", ""]
     ph = [i for i in snapshot(bom, deal.as_of_bom_version) if PLACEHOLDER_TAG in i.tags]
     for k, v in result["scope"]["excluded"].items():
@@ -547,6 +561,8 @@ def main() -> None:
                     help="用于 TCO 对比的场景预设")
     ap.add_argument("--publish-lark", metavar="FOLDER_TOKEN",
                     help="把生成的 xlsx 导入飞书文件夹供在线查看（快照，非维护对象）")
+    ap.add_argument("--allow-rule-violations", action="store_true",
+                    help="有 fail 级一致性违规时仍以 0 退出 —— 仅用于探索性试算")
     ap.add_argument("--allow-deprecated-pack", action="store_true",
                     help="允许加载已退役的标准包 —— 仅用于历史报价复算")
     args = ap.parse_args()
@@ -601,6 +617,7 @@ def main() -> None:
 
     delivery = None
     dplan = None
+    violations: list[Any] = []
     scope_excluded: dict[str, Any] = {}
     if plan_path and args.modes:
         import yaml as _yaml
@@ -613,6 +630,9 @@ def main() -> None:
         base_items, scope_excluded = CostingEngine(bom, pack, deal).in_scope()
         delivery = DeliveryContext(assigned=dplan.assign(base_items),
                                    modes=modes_doc["modes"], internal=internal)
+        # 一致性检查提前到这里 —— 编制说明要写违规，而它在 result 之后就生成了。
+        # 放在后面算等于「算了但编制说明看不到」，正是这轮要修的毛病。
+        violations = dplan.check(base_items, delivery.assigned, pack)
 
     result = CostingEngine(bom, pack, deal, delivery).run()
     out = args.out / "out"
@@ -620,7 +640,8 @@ def main() -> None:
 
     emit_procurement_list(result, pack, out / "01-建设期采购清单.xlsx")
     emit_fp_worksheet(bom, result, pack, deal, out / "02-功能点测算表.xlsx")
-    emit_notes(bom, result, pack, deal, out / "05-编制说明.md")
+    emit_notes(bom, result, pack, deal, out / "05-编制说明.md",
+               rule_violations=violations)
     (args.out / "deal.lock.json").write_text(
         json.dumps(lock(result, bom, pack, deal, baseline_lock),
                    ensure_ascii=False, indent=2),
@@ -632,8 +653,8 @@ def main() -> None:
         base_items, _ = CostingEngine(bom, pack, deal).in_scope()
         om = OpsModel.load(args.modes, args.internal_cost)
         ops = om.expand(base_items, delivery.assigned)
-        violations = dplan.check(base_items, delivery.assigned, pack)
         emit_ops_list(ops, violations, out / "03-运营期费用清单.xlsx")
+
 
         comparisons = []
         for sp in args.scenarios:
@@ -683,6 +704,22 @@ def main() -> None:
     if args.publish_lark:
         for line in publish_lark(sorted(out.glob("*.xlsx")), args.publish_lark):
             print(f"  飞书 {line}")
+
+    # fail 级违规**打在最后**。此前它们只写进 03 的一个 sheet，命令静默退出 0 ——
+    # 广东 × 全私有化 会出一份 ¥921 万的报价，而 D4/D8 对应的科目在广东根本
+    # not_in_scope。「检查了但不说」比不检查更糟：它给人一种已经查过的错觉。
+    # 打在最前会被后面的汇总淹没，所以放末尾。
+    fails = [v for v in violations if v.severity == "fail"]
+    if fails:
+        print(f"\n  ✗ {len(fails)} 条一致性违规（fail）—— 本方案在本标准下不成立：")
+        for v in fails:
+            print(f"      [{v.rule}] {v.message}")
+        if args.allow_rule_violations:
+            print("    （--allow-rule-violations 已指定，按探索性试算放行）")
+        else:
+            print("    产物已生成供查看，但退出码非零。"
+                  "确为探索性试算请加 --allow-rule-violations。")
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

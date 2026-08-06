@@ -246,18 +246,85 @@ def emit_citations(pack: StandardPack, path: Path) -> None:
     path.write_text("\n".join(L), encoding="utf-8")
 
 
+def diff(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
+    """两份基准的差异 —— 这就是跨区域分析。
+
+    第二层不含任何商机决策，所以两份基准**天生可比**：UFP 必须一致
+    （BOM 零改动的证明），差额全部来自区域标准的系数与公式结构。
+    """
+    L = [f"# 区域基准对比", "",
+         f"| | {a['pack_id']} | {b['pack_id']} |", "|---|---|---|",
+         f"| 标准 | {a['standard_doc'][:40]} | {b['standard_doc'][:40]} |",
+         f"| 公式档案 | {a['formula_profile']} | {b['formula_profile']} |",
+         f"| BOM 版本 | {a['bom_version']} | {b['bom_version']} |", ""]
+
+    sa, sb = a["software_dev"], b["software_dev"]
+    same = sa["ufp_total"] == sb["ufp_total"]
+    L += ["## 规模", "",
+          f"UFP {sa['ufp_total']} vs {sb['ufp_total']} —— "
+          + ("**一致**，即同一份 BOM 零改动出两地清单。" if same else
+             "**不一致**，说明 BOM 或计数方法有差异，需先排查。"), ""]
+
+    L += ["## 金额", "", "| 项 | A | B | 比值 |", "|---|---:|---:|---:|"]
+    for k, label in (("afp_total", "调整后功能点"), ("effort_total", "工作量（人月）"),
+                     ("total", "软件开发费（元）")):
+        r = (sb[k] / sa[k]) if sa[k] else float("nan")
+        L.append(f"| {label} | {sa[k]:,.2f} | {sb[k]:,.2f} | {r:.5f} |")
+    L.append("")
+
+    # 逐因子分解：取任一条目看两侧的因子链，再看费率
+    da = {d["id"]: d for d in a["detail"]}
+    db = {d["id"]: d for d in b["detail"]}
+    k = next((i for i in da if i in db), None)
+    if k:
+        L += ["## 因子链（抽样一条，因子对全库同构）", "",
+              "| 因子 | A | B | 比值 |", "|---|---:|---:|---:|"]
+        for f, label in (("size_change", "规模变更"), ("reuse_factor", "复用度"),
+                         ("app_factor", "应用类型")):
+            va, vb = da[k][f], db[k][f]
+            L.append(f"| {label} | {va} | {vb} | {(vb/va if va else float('nan')):.5f} |")
+        L += ["", f"抽样条目 `{k}`；应用类型本地称谓：{da[k]['app_type_local']} / "
+                  f"{db[k]['app_type_local']}", ""]
+
+    ba, bb = a.get("productivity_band"), b.get("productivity_band")
+    L += ["## 生产率区间", "",
+          f"- {a['pack_id']}：" + (f"{len(ba)} 档" if ba else a.get("band_note", "单点")),
+          f"- {b['pack_id']}：" + (f"{len(bb)} 档" if bb else b.get("band_note", "单点")), ""]
+
+    fa = {kk: v.get("status") for kk, v in (a.get("subject_framework") or {}).items()}
+    fb = {kk: v.get("status") for kk, v in (b.get("subject_framework") or {}).items()}
+    rows = [(kk, fa.get(kk, "—"), fb.get(kk, "—")) for kk in sorted(set(fa) | set(fb))
+            if fa.get(kk) != fb.get(kk)]
+    if rows:
+        L += ["## 科目支持差异", "", "| 交付形态 | A | B |", "|---|---|---|"]
+        L += [f"| {r[0]} | {r[1]} | {r[2]} |" for r in rows]
+        L += ["", "**这是换省时最容易出事的一栏** —— 某形态在一地有科目、"
+                  "另一地 not_in_scope，报价会算得出来但落不了账。", ""]
+    return L
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="第二层：BOM × 区域标准包 → 区域基准")
-    ap.add_argument("--bom", required=True, type=Path)
-    ap.add_argument("--pack", required=True, type=Path)
+    ap.add_argument("--bom", type=Path)
+    ap.add_argument("--pack", type=Path)
     ap.add_argument("--out", type=Path,
                     help="默认 baselines/<pack_id>@bom-<version>")
     ap.add_argument("--counting-method", default="估算功能点法")
     ap.add_argument("--as-of", help="按指定 BOM 版本时点重算")
     ap.add_argument("--allow-deprecated-pack", action="store_true",
                     help="允许加载已退役的标准包 —— 仅用于历史复算")
+    ap.add_argument("--diff", nargs=2, type=Path, metavar=("A", "B"),
+                    help="对比两份已生成的基准目录，不重新构建")
     args = ap.parse_args()
 
+    if args.diff:
+        a, b = (json.loads((d / "baseline.json").read_text(encoding="utf-8"))
+                for d in args.diff)
+        print("\n".join(diff(a, b)))
+        return
+
+    if not (args.bom and args.pack):
+        ap.error("需要 --bom 与 --pack（或用 --diff 对比两份已生成的基准）")
     bom = Bom.load(args.bom)
     pack = StandardPack.load(args.pack, allow_deprecated=args.allow_deprecated_pack)
 
