@@ -1109,7 +1109,96 @@ def emit_ops_list(ops_lines, violations, path: Path) -> None:
     gov_sheet.save(wb, path)
 
 
-def emit_tco(comparisons: list[dict], path: Path) -> None:
+def _mode_label(dist: dict[str, int], modes_doc: dict | None) -> str:
+    """把某子系统在该场景下的形态分布写成一格。
+
+    绝大多数子系统全走同一形态，写「D1 平台-定制开发私有化」即可；
+    混用时列出分布 —— 那本身就是要看的信息（R-1 会管同系统内 SaaS 与
+    私有化混用）。
+    """
+    if not dist:
+        return "—"
+    names = ((modes_doc or {}).get("modes") or {})
+    if len(dist) == 1:
+        m = next(iter(dist))
+        return f"{m} {names.get(m, {}).get('name', '')}".strip()
+    return " / ".join(f"{m}×{n}" for m, n in sorted(dist.items(), key=lambda kv: -kv[1]))
+
+
+def _emit_scenario_matrix(wb, comparisons: list[dict],
+                          modes_doc: dict | None = None) -> None:
+    """02 逐子系统场景对比 —— 差异到底出在哪个子系统上。
+
+    Z04 原本只有三行汇总（三个场景各一行）。那回答得了「哪个方案便宜」，
+    回答不了「便宜在哪」—— 而后者才是选方案时要争论的。
+
+    **这不是自由试算，是预置场景的展开。** 每个数都由引擎按该场景重算，
+    与 `04_交付试算` 的活公式不同：形态切换是分派逻辑，Excel 表达不了
+    （见 04 的说明）。所以这里全部是静态值 —— 但每个都算过。
+    """
+    systems = sorted({s for c in comparisons for s in (c.get("by_system") or {})})
+    if not systems or len(comparisons) < 2:
+        return
+    cols = [gov_sheet.Col("子系统", width=38)]
+    for c in comparisons:
+        cols += [gov_sheet.Col(f"{c['name']}·形态", width=22),
+                 gov_sheet.Col(f"{c['name']}·软件开发费（元）", "money", width=17,
+                               sum=True)]
+    s = gov_sheet.GovSheet(
+        wb, "02_逐子系统场景对比",
+        title="各交付场景下，每个子系统分别算多少钱",
+        subtitle="Z04 的三行汇总回答「哪个方案便宜」，本页回答「**便宜在哪**」。"
+                 "每个数由引擎按该场景重算 —— 静态值，不是活公式。",
+        columns=cols)
+    for sysn in systems:
+        row: dict[str, Any] = {"子系统": sysn}
+        for c in comparisons:
+            row[f"{c['name']}·形态"] = _mode_label(
+                (c.get("modes_by_system") or {}).get(sysn, {}), modes_doc)
+            row[f"{c['name']}·软件开发费（元）"] = (c.get("by_system") or {}).get(sysn, 0.0)
+        s.row(row)
+    s.total("软件开发费合计",
+            expect={f"{c['name']}·软件开发费（元）":
+                    sum((c.get("by_system") or {}).values()) for c in comparisons})
+
+    # **主动指出「这两列一样」** —— 否则读表的人会得出「这两个方案没差别」
+    # 的错误结论。实测 A 全私有化 与 C 应用私有化+模型SaaS 在软件开发费这一维
+    # 完全相同：模型走采购科目、不是功能点条目，差异在采购与运营期。
+    same = []
+    for i in range(len(comparisons)):
+        for j in range(i + 1, len(comparisons)):
+            a_, b_ = comparisons[i], comparisons[j]
+            if (a_.get("by_system") or {}) == (b_.get("by_system") or {}):
+                same.append((a_, b_))
+    for a_, b_ in same:
+        da = a_.get("totals", {}).get("construction_total", 0) - \
+            b_.get("totals", {}).get("construction_total", 0)
+        s.blank()
+        s.note(f"　⚠ **「{a_['name']}」与「{b_['name']}」本页数字完全相同** —— "
+               f"不代表两个方案一样。软件开发费只覆盖走功能点法的条目；"
+               f"两者的差异在**采购科目与运营期**：建设期相差 ¥{da:,.2f}，"
+               f"年度经常性 ¥{a_['tco5']['annual_total']:,.2f} vs "
+               f"¥{b_['tco5']['annual_total']:,.2f}。")
+
+    s.blank()
+    s.note("　【不按子系统分摊的部分】硬件购置、实施费、采购类、其他建设费用 —— "
+           "硬件条目没有子系统归属，其他费用是项目级派生。")
+    for c in comparisons:
+        t2 = c.get("totals") or {}
+        rest = t2.get("construction_total", 0) - sum((c.get("by_system") or {}).values())
+        s.note(f"　　{c['name']}：其余建设期 ¥{rest:,.2f}　"
+               f"建设期合计 ¥{t2.get('construction_total', 0):,.2f}　"
+               f"年度经常性 ¥{c['tco5']['annual_total']:,.2f}　"
+               f"5 年 TCO ¥{c['tco5']['tco']:,.2f}")
+    s.blank()
+    s.note("　差异最大的子系统就是方案争论的焦点 —— 但**不要只看建设期**："
+           "订阅形态把钱移到运营期，而山东标准下运营期不计入本次采购预算"
+           "（须另立项目），所以建设期低不等于总花费低。")
+    s.finish()
+
+
+def emit_tco(comparisons: list[dict], path: Path,
+             modes_doc: dict | None = None) -> None:
     """04 TCO 对比 —— 对客户最有说服力的一张表。
 
     这张表**不写合计** —— 各行是互斥的备选方案，纵向相加没有意义。
@@ -1143,10 +1232,12 @@ def emit_tco(comparisons: list[dict], path: Path) -> None:
     s.note(f"　5 年 TCO 最低：{best['name']}（¥{best['tco5']['tco']:,.2f}）")
     s.finish()
 
+    _emit_scenario_matrix(wb, comparisons, modes_doc)
+
     gaps = [g for c in comparisons for g in c.get("gaps", [])]
     if gaps:
         g = gov_sheet.GovSheet(
-            wb, "02_待核价与缺口", title="待核价与缺口",
+            wb, "03_逐子系统对比" if False else "02_待核价与缺口", title="待核价与缺口",
             subtitle="以下项目未计入上表金额，出正式报价前须补齐",
             columns=[gov_sheet.Col("方案", width=22),
                      gov_sheet.Col("类型", width=12),
@@ -1441,13 +1532,26 @@ def main() -> None:
                      for sub, n in sorted(pend2.items())]
             gaps += [{"kind": f"一致性-{v.rule}", "note": v.message}
                      for v in p2.check(base_items, a2, pack) if v.severity == "fail"]
+            # 逐子系统留档 —— Z04 只有三行汇总时，看不出差异出在哪个子系统上，
+            # 而「哪个子系统换形态最划算」正是选方案时唯一想知道的事。
+            by_sys = {x["system"]: x["cost"]
+                      for x in r2["software_dev"]["systems"]}
+            modes_by_sys: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+            for it in base_items:
+                m = a2.get(it.id)
+                if m:
+                    modes_by_sys[it.path.system][m] += 1
             comparisons.append({
                 "name": doc.get("name", Path(sp).stem),
                 "description": doc.get("description", ""),
                 "tco3": tco(cons2, ops2, 3), "tco5": tco(cons2, ops2, 5),
-                "gaps": gaps})
+                "gaps": gaps,
+                "by_system": by_sys,
+                "modes_by_system": {k: dict(v) for k, v in modes_by_sys.items()},
+                "totals": r2["totals"],
+                "annual_by_payee": tco(cons2, ops2, 5)["annual_by_payee"]})
         if comparisons:
-            emit_tco(comparisons, f_tco)
+            emit_tco(comparisons, f_tco, modes_doc)
             (out / "tco-comparison.json").write_text(
                 json.dumps(comparisons, ensure_ascii=False, indent=2), encoding="utf-8")
 
