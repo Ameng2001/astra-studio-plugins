@@ -555,7 +555,8 @@ def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
             gov_sheet.Col("条目数", "int", width=9),
             gov_sheet.Col("调整后功能点", "fp", width=13),
             gov_sheet.Col("软件开发费（元）", "money", width=16),
-            gov_sheet.Col("本次在范围内", width=13, cell_role="input"),
+            gov_sheet.Col("本次在范围内", width=13, cell_role="input",
+                          choices=["是", "否"]),
             gov_sheet.Col("计入建设期（元）", "money", width=16, sum=True,
                           cell_role="calc"),
         ])
@@ -603,20 +604,22 @@ def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
         s.row({"子系统": f"　{label}", "本次在范围内": "自动",
                "计入建设期（元）": gov_sheet.formula(
                    expr, f["amount_yuan"], f["amount_yuan"],
-                   where=f"[04_三层试算] {label}")})
+                   where=f"[04_三层试算] {label}")},
+              cell_roles={"本次在范围内": "calc"})
     d_last = s._next - 1
 
     s.blank()
     s.row({"子系统": "　硬件设备购置费 / 实施费 / 采购类（不随子系统范围变）",
            "本次在范围内": "固定",
-           "计入建设期（元）": fixed})
+           "计入建设期（元）": fixed}, cell_roles={"本次在范围内": "locked"})
     fix_row = s._next - 1
     col = C["计入建设期（元）"]
     s.row({"子系统": "**建设期合计**", "本次在范围内": "",
            "计入建设期（元）": gov_sheet.formula(
                f"={col}{sum_row}+SUM({col}{d_first}:{col}{d_last})+{col}{fix_row}",
                t["construction_total"], t["construction_total"],
-               where="[04_三层试算] 建设期合计", rel_tol=0.0001)})
+               where="[04_三层试算] 建设期合计", rel_tol=0.0001)},
+          cell_roles={"本次在范围内": "calc"})
     s.note(f"　送审值（00_测算汇总 / Z00）建设期合计：¥{t['construction_total']:,.2f}。"
            f"未改任何白格时本表应与之相等。")
     s.note("　试算用法：把某个子系统的「本次在范围内」改成「否」→ 该行不计、"
@@ -730,7 +733,10 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
          "**未启用**（取 1.0）。启用会在报价里引入一段没有地方标准依据的调整"},
         clause=("GB/T 36964 —— **国标参考，非地方标准**，"
                 "启用须在编制说明显式标注" if pf_rows else
-                "未启用 —— 本项目不引入该组因子"))
+                "未启用 —— 本项目不引入该组因子"),
+        # 它在标准取值表里，但**本身不是标准取值** —— 是本商机的选择，
+        # 所以单独标成可试算，与周围的深灰格区分开。
+        cell_roles={"取值": "input"})
 
     weights, w_cite = pack.value(f"fp_counting.{method}.weights")
     s.blank()
@@ -785,6 +791,12 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
     # 维度按**标准包实际有什么**来定，不预设山东的形状 ——
     # 广东人月费率固定 24000，没有开发类别这个维度，硬留一列就是假的。
     has_dev = "dev_first" in prows
+    # 下拉候选取自**本标准包**的系数表 —— 换省自动跟着变，
+    # 而且手打一个候选外的值 VLOOKUP 会 #N/A，那看起来像「表坏了」。
+    app_choices = sorted((pack.data.get("factors", {})
+                          .get("app_type", {}).get("values") or {}))
+    dev_choices = sorted((pack.data.get("factors", {})
+                          .get("dev_category", {}).get("values") or {}))
     s = gov_sheet.GovSheet(
         wb, "03_二层试算", title=f"{result['deal']}　第二层试算 · 算法参数",
         subtitle="试的是**算法参数**。深灰格取自区域标准包（第二层），"
@@ -793,8 +805,10 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
                  "绿色格全部为活公式；**送审值以 00_测算汇总 为准**。",
         columns=[
             gov_sheet.Col("子系统", width=38),
-            gov_sheet.Col("应用类型", width=14, cell_role="input"),
-            *([gov_sheet.Col("开发类别", width=20, cell_role="input")]
+            gov_sheet.Col("应用类型", width=14, cell_role="input",
+                          choices=app_choices or None),
+            *([gov_sheet.Col("开发类别", width=20, cell_role="input",
+                             choices=dev_choices or None)]
               if has_dev else []),
             gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
             gov_sheet.Col("应用类型因子", "rate", width=12, cell_role="calc"),

@@ -86,10 +86,12 @@ RIGHT = Alignment(horizontal="right", vertical="center")
 #: 不必去读说明。这正好回答了「区域参数要不要支持人编辑」：
 #: 系数字典不得改（那是标准原文），项目特征可填（那是本次选择），计算区自动。
 LOCKED_FILL = PatternFill("solid", fgColor="D9D9D9")   # 深灰：标准取值，不得修改
-INPUT_FILL = PatternFill("solid", fgColor="FFFFFF")    # 白：需填写/可试算
+#: 浅黄 —— **可试算的格子**。原来用白色（FFFFFF），与表底完全一样，
+#: 等于没标：样例表里「白色＝需填写」成立是因为它整表有底色，我们没有。
+INPUT_FILL = PatternFill("solid", fgColor="FFF2CC")
 CALC_FILL = PatternFill("solid", fgColor="E2EFDA")     # 绿：自动计算，不得修改
 LEGEND = [("D9D9D9", "标准取值，不得修改 —— 改了就偏离编制依据"),
-          ("FFFFFF", "可修改：改这些格子做试算，看对总价的影响"),
+          ("FFF2CC", "**可试算**：改这些格子看对总价的影响（多数带下拉）"),
           ("E2EFDA", "自动计算，不得修改")]
 
 TODO_MARKERS = ("待核价", "待核", "待补", "待查证", "待确认", "待技术",
@@ -249,11 +251,25 @@ class Col:
     role: str | None = None
     #: 单元格职责：locked（标准取值）/ input（可试算）/ calc（自动算）/ None（普通）
     cell_role: str | None = None
+    #: 下拉候选。给了就在该列数据区加数据有效性 ——
+    #: **能枚举的就别让人手打**：手打一个不在系数表里的应用类型，
+    #: VLOOKUP 返回 #N/A，而那看起来像「表坏了」而不是「你填错了」。
+    choices: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.fmt not in FMT:
             raise GovSheetError(f"列 {self.name!r} 的 fmt={self.fmt!r} 未知；"
                                 f"可选：{sorted(FMT)}")
+        if self.choices is not None:
+            inline = '"' + ",".join(str(c) for c in self.choices) + '"'
+            if len(inline) > 255:
+                raise GovSheetError(
+                    f"列 {self.name!r} 的下拉候选内联后 {len(inline)} 字符，"
+                    f"超过 Excel 数据有效性的 255 上限；请改引用区域。")
+            if any("," in str(c) for c in self.choices):
+                raise GovSheetError(
+                    f"列 {self.name!r} 的下拉候选含逗号 —— 内联列表以逗号分隔，"
+                    f"会被拆成两项：{[c for c in self.choices if ',' in str(c)]}")
         if self.cell_role not in (None, "locked", "input", "calc"):
             raise GovSheetError(
                 f"列 {self.name!r} 的 cell_role={self.cell_role!r} 未知；"
@@ -319,6 +335,12 @@ class GovSheet:
     header_row: int = field(init=False, default=0)
     _seq: int = field(init=False, default=0)
     _first_data: int = field(init=False, default=0)
+    #: 最后一条**明细行**的行号。合计行与说明行不算。
+    _last_data: int = field(init=False, default=0)
+    #: 每列实际写成 input（可试算）的行号。**下拉只挂在这些格子上** ——
+    #: 判据不是「是明细行」而是「这一格可试算」，两者不等：04 的费用行也是
+    #: 明细行，但它那格写的是「自动」，挂个能改的下拉只会误导。
+    _input_rows: dict = field(init=False, default_factory=dict)
     _sums: dict[str, float] = field(init=False, default_factory=dict)
     _finished: bool = field(init=False, default=False)
 
@@ -414,8 +436,14 @@ class GovSheet:
         else:
             cl.alignment = LEFT
 
-    def row(self, values: dict[str, Any], clause: str | None = None) -> int:
-        """写一条明细。`clause_required` 时不给条款出处会报错。"""
+    def row(self, values: dict[str, Any], clause: str | None = None,
+            cell_roles: dict[str, str] | None = None) -> int:
+        """写一条明细。`clause_required` 时不给条款出处会报错。
+
+        `cell_roles` 按列名覆盖该行的单元格职责 —— 整列 locked 的参数面板里
+        要放一格「可试算」时用它（项目特征因子就是这种：它在标准取值表里，
+        但它本身**不是标准取值**，是本商机的选择）。
+        """
         if self._finished:
             raise GovSheetError(f"[{self.name}] 已 finish()，不能再写行")
         unknown = set(values) - set(self._by_name)
@@ -431,12 +459,28 @@ class GovSheet:
                     f"  送审明细每一行都要能追到依据条款 —— 评审逐行核对时"
                     f"「没写出处」等同于「没有依据」。")
             values = {**values, self.clause_name: clause}
+        for k, v_ in (cell_roles or {}).items():
+            if k not in self._by_name:
+                raise GovSheetError(
+                    f"[{self.name}] cell_roles 指向未声明的列 {k!r}；"
+                    f"已声明：{[c.name for c in self.columns]}")
+            if v_ not in ("locked", "input", "calc"):
+                raise GovSheetError(
+                    f"[{self.name}] cell_roles[{k!r}]={v_!r} 未知；"
+                    f"可选：locked | input | calc")
+
         r = self._next
         self._seq += 1
         for c in self.columns:
             i = self._by_name[c.name]
             v = self._seq if c.name == "序号" else values.get(c.name)
-            self._put(r, c, i, v)
+            ov = (cell_roles or {}).get(c.name)
+            eff = ov or c.cell_role
+            if eff == "input":
+                self._input_rows.setdefault(c.name, []).append(r)
+            self._put(r, c, i, v,
+                      fill=({"locked": LOCKED_FILL, "input": INPUT_FILL,
+                             "calc": CALC_FILL}[ov] if ov else None))
             # 活公式也要进合计 —— 它是 str 子类，但携带自验过的 computed 值。
             # 漏掉会让合计行的 =SUM() 与逐行公式算出来的数对不上。
             if c.sum:
@@ -445,6 +489,7 @@ class GovSheet:
                 elif isinstance(v, (int, float)) and not isinstance(v, bool):
                     self._sums[c.name] = self._sums.get(c.name, 0.0) + v
         self._next += 1
+        self._last_data = r
         return r
 
     def group(self, label_text: str, values: dict[str, Any] | None = None,
@@ -545,6 +590,31 @@ class GovSheet:
                                        for ch in str(v)[:80]))
                 w = max(8, min(60, w + 3))
             self.ws.column_dimensions[get_column_letter(i)].width = w
+
+        # 下拉：挂在该列的数据区。放在 finish() 是因为这时才知道数据区多长。
+        from openpyxl.worksheet.datavalidation import DataValidation
+        for c in self.columns:
+            rows_ = self._input_rows.get(c.name) or []
+            if not c.choices or not rows_:
+                continue
+            col_l = get_column_letter(self._by_name[c.name])
+            # 连续段合并成区间，不连续就分段 —— 逐格加会让 sqref 长得离谱
+            spans, s0, prev = [], rows_[0], rows_[0]
+            for rr in rows_[1:]:
+                if rr == prev + 1:
+                    prev = rr; continue
+                spans.append((s0, prev)); s0 = prev = rr
+            spans.append((s0, prev))
+            dv = DataValidation(
+                type="list",
+                formula1='"' + ",".join(str(x) for x in c.choices) + '"',
+                allow_blank=True, showErrorMessage=True,
+                errorTitle="取值不在候选内",
+                error=f"「{c.name}」只能取：" + "、".join(str(x) for x in c.choices)
+                      + "。手打一个候选外的值，下游查表会返回 #N/A。")
+            self.ws.add_data_validation(dv)
+            for a_, b_ in spans:
+                dv.add(f"{col_l}{a_}:{col_l}{b_}")
 
         self.ws.freeze_panes = f"A{self.header_row + 1}"
         self.ws.auto_filter.ref = (

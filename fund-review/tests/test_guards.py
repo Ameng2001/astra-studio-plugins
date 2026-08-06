@@ -805,6 +805,61 @@ check("pf=1.2 时按外层再取整", _eff(830.06, 6.71, 174, 1.2),
 
 
 
+# --- 可试算格：浅色 + 下拉 ---
+# 原来 input 用白色（FFFFFF），与表底完全一样 —— 等于没标。
+check("可试算格是浅黄不是白", gs.INPUT_FILL.fgColor.rgb[-6:], "FFF2CC")
+check("三种角色配色互不相同",
+      len({gs.LOCKED_FILL.fgColor.rgb, gs.INPUT_FILL.fgColor.rgb,
+           gs.CALC_FILL.fgColor.rgb}), 3)
+
+# 内联候选的两个硬限制
+raises("候选含逗号要报错（内联列表以逗号分隔）",
+       lambda: gs.Col("x", choices=["a,b", "c"]), gs.GovSheetError, "含逗号")
+raises("候选内联超 255 字符要报错",
+       lambda: gs.Col("x", choices=["很长的候选名称" * 8] * 6),
+       gs.GovSheetError, "255")
+
+# 下拉只挂在 input 格上 —— 判据不是「是明细行」
+wb_d = gs.new_workbook()
+sd = gs.GovSheet(wb_d, "01_t", title="T", columns=[
+    gs.Col("名称"), gs.Col("选择", cell_role="input", choices=["是", "否"])])
+sd.row({"名称": "子系统甲", "选择": "是"})
+sd.row({"名称": "子系统乙", "选择": "是"})
+sd.row({"名称": "　派生行", "选择": "自动"}, cell_roles={"选择": "calc"})
+sd.total("合计")
+sd.finish()
+dvs = sd.ws.data_validations.dataValidation
+check("只生成 1 处下拉", len(dvs), 1)
+check("区间只盖 input 行，不含派生行与合计行", str(dvs[0].sqref), "C3:C4")
+check("派生行那格是绿不是黄",
+      sd.ws.cell(5, 3).fill.fgColor.rgb[-6:], "E2EFDA")
+
+# 无 input 行时不生成下拉
+wb_e = gs.new_workbook()
+se = gs.GovSheet(wb_e, "01_e", title="T",
+                 columns=[gs.Col("名称"), gs.Col("选择", choices=["是", "否"])])
+se.row({"名称": "某项", "选择": "是"})
+se.finish()
+check("列没标 input 就不挂下拉", len(se.ws.data_validations.dataValidation), 0)
+
+# 行级 cell_roles 覆盖（项目因子那格：整列 locked 里放一格可试算）
+wb_f = gs.new_workbook()
+sf2 = gs.GovSheet(wb_f, "01_f", title="T", columns=[
+    gs.Col("参数"), gs.Col("取值", "rate", cell_role="locked")])
+sf2.row({"参数": "生产率", "取值": 6.71})
+sf2.row({"参数": "项目因子", "取值": 1.0}, cell_roles={"取值": "input"})
+check("整列 locked 里能单独放一格 input",
+      (sf2.ws.cell(3, 3).fill.fgColor.rgb[-6:],
+       sf2.ws.cell(4, 3).fill.fgColor.rgb[-6:]), ("D9D9D9", "FFF2CC"))
+raises("cell_roles 指向未声明的列要报错",
+       lambda: sf2.row({"参数": "某参数"}, cell_roles={"不存在的列": "input"}),
+       gs.GovSheetError, "未声明的列")
+raises("未知的行级角色要报错",
+       lambda: sf2.row({"参数": "某参数"}, cell_roles={"取值": "readonly"}),
+       gs.GovSheetError, "未知")
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:
