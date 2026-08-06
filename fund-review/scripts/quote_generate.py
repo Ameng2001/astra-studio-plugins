@@ -36,6 +36,67 @@ from ops_model import OpsModel, tco
 from standard_pack import StandardPack
 
 
+def load_baseline(bdir: Path) -> tuple[dict, dict, Bom, StandardPack]:
+    """从第二层产物解析出这次报价的 BOM 与标准包，并校验哈希。
+
+    第三层**不重新实现聚合逻辑** —— 仍由引擎算。基准的作用是两个：
+      1. 声明依赖：这份报价建立在哪个 (BOM 版本 × 标准包) 上，有据可查
+      2. 完整性断言：引擎在无交付方案下算出的 UFP/AFP 必须与基准一致，
+         对不上说明输入被人动过而基准没重建 —— 那时报价就不可信了
+
+    只记 pack_id 而不校验哈希是不够的：标准包改了一个系数、pack_id 不变，
+    基准过期而报价照出，没人会发现。
+    """
+    import hashlib
+    lock = json.loads((bdir / "baseline.lock.json").read_text(encoding="utf-8"))
+    bl = json.loads((bdir / "baseline.json").read_text(encoding="utf-8"))
+    src = lock.get("source_paths") or {}
+    bom_dir, pack_dir = Path(src.get("bom", "bom")), Path(src.get("pack", ""))
+
+    def digest(paths: list[Path]) -> str:
+        h = hashlib.sha256()
+        for q in sorted(paths):
+            h.update(q.read_bytes())
+        return h.hexdigest()[:16]
+
+    now_bom = digest(sorted((bom_dir / "items").glob("*.yaml")))
+    now_pack = digest([pack_dir / "pack.yaml" if pack_dir.is_dir() else pack_dir])
+    drift = []
+    if now_bom != lock["bom"]["items_sha256_16"]:
+        drift.append(f"BOM 条目已变（基准 {lock['bom']['items_sha256_16']} → 现 {now_bom}）")
+    if now_pack != lock["standard_pack"]["sha256_16"]:
+        drift.append(f"标准包已变（基准 {lock['standard_pack']['sha256_16']} → 现 {now_pack}）")
+    if drift:
+        raise SystemExit(
+            "基准已过期，拒绝出报价：\n  " + "\n  ".join(drift) +
+            f"\n  请先重建基准：baseline_build --bom {bom_dir} --pack {pack_dir}")
+
+    bom = Bom.load(bom_dir)
+    pack = StandardPack.load(pack_dir, allow_deprecated=True)  # 基准已锁，退役与否由基准负责
+    return bl, lock, bom, pack
+
+
+def assert_matches_baseline(bl: dict, bom: Bom, pack: StandardPack,
+                            deal: DealConfig) -> None:
+    """引擎在无交付方案、含占位下的结果必须与基准逐位一致。
+
+    这条断言是分层契约的兑现 —— 没有它，`--baseline` 就只是个装饰性的参数。
+    """
+    base_deal = DealConfig(deal_id="__check__", counting_method=deal.counting_method,
+                           project_type=deal.project_type,
+                           include_placeholders=True,
+                           as_of_bom_version=deal.as_of_bom_version)
+    r = CostingEngine(bom, pack, base_deal).run()["software_dev"]
+    b = bl["software_dev"]
+    for k in ("ufp_total", "afp_total", "total"):
+        if r[k] != b[k]:
+            raise SystemExit(
+                f"与基准不一致：software_dev.{k} 引擎 {r[k]} vs 基准 {b[k]}。"
+                f"\n  基准是 {bl['pack_id']} × BOM {bl['bom_version']}，"
+                f"计数方法 {bl['counting_method']}；本次 {deal.counting_method}。"
+                f"\n  若确实换了计数方法/项目类型，须先重建基准。")
+
+
 def publish_lark(files: list[Path], folder: str) -> list[str]:
     """把生成的表格导入飞书文件夹，成为可在线查看的表格。
 
@@ -124,8 +185,15 @@ def emit_procurement_list(result: dict[str, Any], pack: StandardPack,
 
     if result["scope"]["excluded"]:
         ws.append([])
-        ws.append(["【范围说明】未计入本清单的条目：" +
-                   "；".join(f"{k} {v} 条" for k, v in result["scope"]["excluded"].items())])
+        # 列而不计 ≠ 不列。范围外的子系统整段消失，财评会认为方案漏项 ——
+        # 采购科目那一轮的教训，这里同样适用。
+        ws.append(["【范围说明】未计入本清单的条目", "", "", "列而不计：列出以证明不是漏项", ""])
+        for k, v in result["scope"]["excluded"].items():
+            ws.append(["", k, "不计入", f"{v} 条", ""])
+        oos = result["scope"].get("out_of_scope_systems") or []
+        if oos:
+            ws.append(["", "本次范围外的子系统", "不计入",
+                       "；".join(f"{s['system']}（{s['items']} 条）" for s in oos), ""])
 
     if pur["not_applicable"]:
         ws.append([])
@@ -425,9 +493,12 @@ def emit_tco(comparisons: list[dict], path: Path) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="生成报价输出物")
-    ap.add_argument("--bom", required=True, type=Path)
-    ap.add_argument("--pack", required=True, type=Path)
+    ap = argparse.ArgumentParser(
+        description="第三层：区域基准 × 交付方案 × 范围 → 本商机报价")
+    ap.add_argument("--baseline", type=Path,
+                    help="第二层产物目录（baseline_build 的 --out）")
+    ap.add_argument("--bom", type=Path, help="不用 --baseline 时的直连模式")
+    ap.add_argument("--pack", type=Path, help="不用 --baseline 时的直连模式")
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--deal-id", default="报价")
     ap.add_argument("--as-of", help="按指定 BOM 版本时点重算（历史报价复现）")
@@ -438,6 +509,9 @@ def main() -> None:
     ap.add_argument("--internal-cost", type=Path,
                     help="delivery-modes/internal-cost-model.yaml（敏感，仅本地）")
     ap.add_argument("--delivery-plan", type=Path, help="本商机采用的交付方案")
+    ap.add_argument("--mode", help="从模式库按名字选一个交付模式（delivery-modes/scenarios/）")
+    ap.add_argument("--mode-lib", type=Path, default=Path("delivery-modes/scenarios"),
+                    help="模式库目录")
     ap.add_argument("--scenarios", type=Path, nargs="*", default=[],
                     help="用于 TCO 对比的场景预设")
     ap.add_argument("--publish-lark", metavar="FOLDER_TOKEN",
@@ -446,22 +520,51 @@ def main() -> None:
                     help="允许加载已退役的标准包 —— 仅用于历史报价复算")
     args = ap.parse_args()
 
-    bom = Bom.load(args.bom)
-    pack = StandardPack.load(args.pack, allow_deprecated=args.allow_deprecated_pack)
-    deal = DealConfig(deal_id=args.deal_id, project_type=args.project_type,
+    baseline = baseline_lock = None
+    if args.baseline:
+        baseline, baseline_lock, bom, pack = load_baseline(args.baseline)
+        counting_method = baseline["counting_method"]
+    elif args.bom and args.pack:
+        # 直连模式：不经第二层。保留是为了快速试算与历史脚本，
+        # 但**产出不带基准溯源**，正式报价应走 --baseline。
+        bom = Bom.load(args.bom)
+        pack = StandardPack.load(args.pack, allow_deprecated=args.allow_deprecated_pack)
+        counting_method = "估算功能点法"
+        print("  ⚠ 直连模式（未经第二层基准），产出不带基准溯源")
+    else:
+        ap.error("需要 --baseline，或同时给出 --bom 与 --pack")
+
+    deal = DealConfig(deal_id=args.deal_id, counting_method=counting_method,
+                      project_type=args.project_type,
                       reuse_level=args.reuse_level,
                       include_placeholders=args.include_placeholders,
                       as_of_bom_version=args.as_of)
+    if baseline:
+        assert_matches_baseline(baseline, bom, pack, deal)
+
+    # 模式库：按名字挑，而不是每个商机手写 delivery-plan
+    plan_path = args.delivery_plan
+    if args.mode:
+        cands = sorted(args.mode_lib.glob("*.yaml"))
+        import yaml as _yaml
+        named = {(_yaml.safe_load(c.read_text(encoding="utf-8")) or {}).get("name", c.stem): c
+                 for c in cands}
+        if args.mode not in named:
+            ap.error(f"模式库中无 {args.mode!r}；现有：{sorted(named)}")
+        plan_path = named[args.mode]
 
     delivery = None
     dplan = None
-    if args.delivery_plan and args.modes:
+    scope_excluded: dict[str, Any] = {}
+    if plan_path and args.modes:
         import yaml as _yaml
         modes_doc = _yaml.safe_load(args.modes.read_text(encoding="utf-8"))
         internal = (_yaml.safe_load(args.internal_cost.read_text(encoding="utf-8"))
                     if args.internal_cost else {})
-        base_items, _ = CostingEngine(bom, pack, deal).in_scope()
-        dplan = DeliveryPlan.load(args.modes, args.delivery_plan)
+        dplan = DeliveryPlan.load(args.modes, plan_path)
+        # 范围先于形态：范围外的条目连形态都不该指派
+        deal.scope_filter = dplan.in_scope
+        base_items, scope_excluded = CostingEngine(bom, pack, deal).in_scope()
         delivery = DeliveryContext(assigned=dplan.assign(base_items),
                                    modes=modes_doc["modes"], internal=internal)
 
@@ -473,7 +576,8 @@ def main() -> None:
     emit_fp_worksheet(bom, result, pack, deal, out / "02-功能点测算表.xlsx")
     emit_notes(bom, result, pack, deal, out / "05-编制说明.md")
     (args.out / "deal.lock.json").write_text(
-        json.dumps(lock(result, bom, pack, deal), ensure_ascii=False, indent=2),
+        json.dumps(lock(result, bom, pack, deal, baseline_lock),
+                   ensure_ascii=False, indent=2),
         encoding="utf-8")
     (out / "costing-result.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

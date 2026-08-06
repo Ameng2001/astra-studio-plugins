@@ -59,6 +59,28 @@ class DeliveryPlan:
                     break
         return out
 
+    def in_scope(self, item: BomItem) -> tuple[bool, str]:
+        """本商机范围内？返回 (是否在内, 原因)。
+
+        范围与交付形态**共用同一套 match 语法**，方案人员只学一次。
+        选择单元是**子系统** —— 不引入「报价模块」：l1 在各子系统被切在不同
+        语义高度上（82 个 l1 里 17% 只有 ≤5 条，数据建设整个只有 1 个），
+        挂上范围后报价颗粒度会不可控。
+
+        没写 scope 就是全量 —— 保持与切层前一致。
+        """
+        sc = self.plan.get("scope") or {}
+        inc, exc = sc.get("include") or [], sc.get("exclude") or []
+        for c in exc:
+            if self._match(item, c):
+                return False, f"被 exclude 规则排除：{c}"
+        if not inc:
+            return True, ""
+        for c in inc:
+            if self._match(item, c):
+                return True, ""
+        return False, "不在 include 规则内"
+
     @staticmethod
     def _match(item: BomItem, cond: dict[str, Any]) -> bool:
         if "cls" in cond and item.cls != cond["cls"]:

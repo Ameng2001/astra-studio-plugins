@@ -56,7 +56,13 @@ class DealConfig:
     project_type: str = "新建"                  # 新建 | 升级改造
     reuse_level: str = "新建"                   # 解析到 pack.factors.reuse 的 key
     include_placeholders: bool = False          # 占位条目默认不计入报价
-    scope_tags: list[str] = field(default_factory=list)   # 空 = 全量
+    scope_tags: list[str] = field(default_factory=list)   # 空 = 全量（遗留，见 scope_filter）
+    #: 范围过滤器 —— 由交付方案的 `scope` 块提供，签名 (item) -> (是否在内, 原因)。
+    #: 选择单元是**子系统**，与交付形态共用同一套 match 语法。
+    #: 为什么不用 scope_tags：BOM 的 tags 全是治理标记（ilf-补齐 / placeholder /
+    #: 采购科目…），没有一个是范围标记。拿治理标记当范围用是错的；而给每个商机
+    #: 往 BOM 里加一轮「一期/二期」tag，是把商机决策塞回产品事实。
+    scope_filter: Any = None
     as_of_bom_version: str | None = None
 
 
@@ -142,8 +148,28 @@ class CostingEngine:
             if self.deal.scope_tags and not (set(i.tags) & set(self.deal.scope_tags)):
                 excluded["不在范围标签内"] += 1
                 continue
+            if self.deal.scope_filter is not None:
+                ok, why = self.deal.scope_filter(i)
+                if not ok:
+                    excluded[f"范围外：{why}"] += 1
+                    continue
             kept.append(i)
         return kept, dict(excluded)
+
+    def _out_of_scope_systems(self) -> list[dict[str, Any]]:
+        """被范围排除掉的子系统 —— 供清单「列而不计」。
+
+        只报**整个子系统**被排除的，不逐条列 1360 条。范围的选择单元就是子系统，
+        呈现也该是子系统。
+        """
+        if self.deal.scope_filter is None:
+            return []
+        by_sys: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        for i in snapshot(self.bom, self.deal.as_of_bom_version):
+            ok, _ = self.deal.scope_filter(i)
+            by_sys[i.path.system][0 if ok else 1] += 1
+        return [{"system": s, "items": n[1]}
+                for s, n in sorted(by_sys.items()) if n[0] == 0 and n[1] > 0]
 
     # ---- 软件开发费用 ----
 
@@ -418,7 +444,8 @@ class CostingEngine:
             "counting_method": self.deal.counting_method,
             "project_type": self.deal.project_type,
             "reuse_level": self.deal.reuse_level,
-            "scope": {"items": len(items), "excluded": excluded},
+            "scope": {"items": len(items), "excluded": excluded,
+                      "out_of_scope_systems": self._out_of_scope_systems()},
             "software_dev": {
                 "systems": [vars(s) for s in sys_costs],
                 "ufp_total": sum(s.ufp for s in sys_costs),
@@ -449,7 +476,7 @@ class CostingEngine:
 
 
 def lock(result: dict[str, Any], bom: Bom, pack: StandardPack,
-         deal: DealConfig) -> dict[str, Any]:
+         deal: DealConfig, baseline_lock: dict[str, Any] | None = None) -> dict[str, Any]:
     """版本锁 —— 凭此可精确重算本次报价。"""
     return {
         "deal_id": deal.deal_id,
@@ -470,4 +497,13 @@ def lock(result: dict[str, Any], bom: Bom, pack: StandardPack,
         "reproduce": (
             "python3 quote_generate.py --bom <dir> --pack <dir> --deal <deal.yaml> "
             f"--as-of {result['bom_version']}"),
+        # 引第二层的锁，形成 deal → baseline → BOM 的链。
+        # 没有它，「这份报价基于哪个基准」只能靠 pack_id 猜 —— 而标准包改一个
+        # 系数、pack_id 不变，基准就悄悄过期了。
+        "baseline": ({"kind": baseline_lock.get("kind"),
+                      "generated": baseline_lock.get("generated"),
+                      "bom_sha256_16": baseline_lock["bom"]["items_sha256_16"],
+                      "pack_sha256_16": baseline_lock["standard_pack"]["sha256_16"],
+                      "totals": baseline_lock.get("totals")}
+                     if baseline_lock else None),
     }
