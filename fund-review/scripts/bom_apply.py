@@ -350,13 +350,30 @@ def main() -> None:
     ap.add_argument("--bom", required=True, type=Path)
     ap.add_argument("--adjustment", required=True, choices=sorted(ADJUSTMENTS))
     ap.add_argument("--new-version", required=True)
-    ap.add_argument("--spec", type=Path, help="调整项 E 的策展文件 E-decomposition.yaml")
+    ap.add_argument("--spec", type=Path,
+                    help="策展文件 —— **仅 E / ADJ 用**（E-decomposition.yaml / "
+                         "裁决 csv）。传给 A / F 会被拒绝，不是被忽略")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     bom = Bom.load(args.bom)
     before = sum(W[i.nesma.type] for i in bom.active() if i.nesma)
     before_n = len(bom.active())
+
+    # `--spec` 只有 E / ADJ 消费。此前传给 F 会被 main 的三元表达式**静默丢弃** ——
+    # 命令照跑、结果与不传 spec 完全一致，于是「按裁决结果落库」实际是
+    # 「按规则重跑」，而输出看不出差别。同一个失败形状在本仓库出现过太多次：
+    # 不报错，只是做了另一件事。
+    SPEC_REQUIRED = {"E", "ADJ"}
+    if args.adjustment in SPEC_REQUIRED:
+        if not args.spec:
+            ap.error(f"调整项 {args.adjustment} 需要 --spec（策展文件）")
+        if not args.spec.exists():
+            ap.error(f"--spec 指向的文件不存在：{args.spec}")
+    elif args.spec:
+        ap.error(f"调整项 {args.adjustment} 不使用 --spec —— "
+                 f"它按规则重跑，不读策展文件。传了会让人以为落的是裁决结果。"
+                 f"需要 --spec 的是：{sorted(SPEC_REQUIRED)}")
 
     fn = ADJUSTMENTS[args.adjustment]
     bom, report = (fn(bom, args.new_version, args.spec)

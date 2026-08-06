@@ -64,6 +64,68 @@ PYTHONPATH=<plugin>/scripts python3 <plugin>/scripts/bom_build.py \
 UFP 对账是最关键的一条 —— 它证明这是**忠实导入**而非重新判定。
 导入阶段不改变任何功能点类型；类型的修正属 `bom-validate` 暴露、P2 重拆解决。
 
+
+## BOM 演进工具（导入之后才用得上）
+
+`bom_build` 只做**忠实导入**。导入之后的每一次结构性演进都由下面这组工具完成，
+每次产出一个新版本号并记 CHANGELOG —— **没有一个会就地改 BOM 而不留痕**。
+
+| 工具 | 做什么 | 何时用 |
+|---|---|---|
+| `bom_p2_proposal` | 依标准识别规则**测算**重拆方案，产出提案与裁决清单 | `bom-validate` 报出 G-03/G-04（批量打标、零 ILF）之后 |
+| `bom_apply` | 把调整落成一个新版本（A/ADJ/E/F 四类） | 提案经人工裁决之后 |
+| `bom_rationale` | 用规则引擎独立重判，为一致的条目补 `rationale` | G-02b 大面积缺判定理由时 |
+| `bom_restore_desc` | 从源工作簿**回源**恢复被机械切分的描述 | G-05 报出大量过短描述时 |
+
+### 它们共同的一条纪律：不替产品做判断
+
+```bash
+PLUG=<plugin>/scripts
+
+# 1) 测算重拆方案 —— **只提案不改 BOM**，每项带标准条款、置信度、方向（增/减）
+PYTHONPATH=$PLUG python3 $PLUG/bom_p2_proposal.py --bom bom --out bom/p2-proposal
+#    A 数据功能折叠(减) B 数据功能完整性(增) C 补齐缺失 ILF(增)
+#    D 机械碎片合并(减) E AI 资产重拆(增)
+
+# 2) 人工裁决后落版本
+PYTHONPATH=$PLUG python3 $PLUG/bom_apply.py --bom bom --adjustment F     --spec bom/p2-proposal/F-adjudicated.csv --new-version 0.13.0 [--dry-run]
+
+# 3) 补 rationale —— 只在规则引擎重判与现有类型**一致且无竞争规则**时生成
+PYTHONPATH=$PLUG python3 $PLUG/bom_rationale.py --bom bom --version 0.14.0 [--dry-run]
+
+# 4) 回源恢复描述 —— 需要源工作簿
+PYTHONPATH=$PLUG python3 $PLUG/bom_restore_desc.py --bom bom \
+    --source raw-input/<建设清单>.xlsx --version 0.15.0 [--dry-run]
+```
+
+**每一个都支持 `--dry-run`，先看再落。**
+
+> `--spec` 曾经在传给 A/F 时被**静默丢弃** —— 命令照跑，结果与不传完全一致，
+> 于是「按裁决结果落库」实际是「按规则重跑」，输出还看不出差别。
+> 现在四条路径都会硬报错：F 传 spec 拒绝、E 缺 spec 拒绝、spec 文件不存在拒绝。
+
+### 三条容易被绕过的边界
+
+**`bom_p2_proposal` 只提案。** 它给出的每项调整都带置信度（高＝标准条款可直接判定 /
+中＝规则推导需实体确认 / 低＝需领域判断）和方向。低置信度的必须人工裁决，
+不要因为"看起来对"就整批 apply —— 提案的价值在于它把判断暴露出来给人做。
+
+**`bom_rationale` 是印证，不是编理由。** 它只在规则引擎**独立重判**后与现有类型
+一致、且无竞争规则时才生成，生成的 rationale 自带出身声明、`counted_by` 记
+`rule-corroborated@<版本>`，与人工撰写的可区分。不一致或有竞争规则的一律不生成，
+导出待人工清单。
+
+给既有结论倒着编一个理由，等于把 G-02b 变成摆设。而且 G-02c（双人复核）不受影响，
+仍全量阻断 released —— **印证回答"有没有理由"，人工复核回答"理由对不对"**，两件事。
+
+**`bom_restore_desc` 是回源，不是重写需求。** 那些残片（「支持待办事项。」）不是
+描述写得简，是源表把「建设详情」单元格机械切碎的产物，**原文还在源表里**。
+所以是按层级键定位父级原文、切成语义段、用字符重合度把残片对回所属段落。
+
+对不齐任何分段的（如从「男女人数」中间切断的「男」「女」两片）判为机械碎片、
+标记待合并，**不硬补描述** —— 给一个本不该独立存在的条目补描述，
+等于把切分错误固化下来。
+
 ## 注意
 
 - **不要**在导入时"顺手修正"看起来不合理的类型标注。忠实导入 + 门禁暴露，比静默修改可追溯得多
