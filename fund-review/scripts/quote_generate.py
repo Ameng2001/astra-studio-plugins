@@ -1,16 +1,20 @@
 """quote_generate — 三层合成 → 报价输出物。
 
-产出（P4 范围）：
-  01-建设期采购清单.xlsx   按标准科目树组织，每行带 BOM id 与条款出处
-  02-功能点测算表.xlsx     逐条目 UFP → AFP → 工作量 → 费用，可复算
-  05-编制说明.md           计数方法、参数取值与出处、假设与边界
-  deal.lock.json           版本锁：BOM 版本 + 标准包 + 交付配置
+产出（送审包，命名与结构对齐政府送审惯例，见 `gov_sheet`）：
+  …_Z00_项目总报价汇总_…xlsx   一页纸看清总额、构成、占比、依据 + 附件索引
+  …_Z01_建设期采购清单_…xlsx   按标准科目树组织，每行带条款出处
+  …_Z02_功能点测算表_…xlsx     00 汇总 / 01 明细 / 02 计价参数
+  …_Z03_运营期费用清单_…xlsx   逐项运营期成本 + 一致性检查
+  …_Z04_交付方式TCO对比_…xlsx  各模式 3 年 / 5 年 TCO
+  Z05-编制说明.md              计数方法、参数取值与出处、假设与边界
+  deal.lock.json               版本锁：BOM 版本 + 标准包 + 交付配置
 
-运营期清单与 TCO 属 P5（交付方式）范围，本阶段不产出。
+**数值由引擎算定，Excel 不承担计算。** 从根上消除 P0 那类 SUMIF/VLOOKUP
+因单元格布局失效的缺陷。
 
-**Excel 只是渲染产物。** 所有数值由引擎算定后写入静态值 ——
-从根上消除 P0 那类 SUMIF/VLOOKUP 因单元格布局失效的缺陷。
-另附「复算公式」列供人工核验，但它不参与计算。
+唯二的活公式是**合计行的 `=SUM()`** 与**明细的「复算式」`=ROUND(...)`** ——
+它们的存在是为了让评审能点开自己验。正因如此，写之前必须自己先验过：
+`GovSheet.total(expect=)` 逐列比对引擎值，对不上就拒绝出表。
 
 用法：
     python3 quote_generate.py --bom <dir> --pack <dir> --out <deal_dir> \
@@ -28,9 +32,10 @@ from typing import Any
 import openpyxl
 
 import excel_styler
-from bom_schema import FP_COUNTED_CLASSES, Bom
+import gov_sheet
+from bom_schema import Bom, is_fp_counted
 from costing_engine import (PLACEHOLDER_TAG, CostingEngine, DealConfig,
-                            DeliveryContext, lock, snapshot)
+                            DeliveryContext, lock, snapshot, xlround)
 from delivery_matrix import DeliveryPlan
 from ops_model import OpsModel, tco
 from standard_pack import StandardPack
@@ -123,27 +128,57 @@ def publish_lark(files: list[Path], folder: str) -> list[str]:
     return out
 
 
+#: `totals` 的内部键 → 公文用词。其他费用的计费基数会把这些键拼进「计算依据」，
+#: 不译就是英文字段名印在报财评的表上。
+BASE_LABELS = {
+    "software_dev": "软件开发费",
+    "software_purchase": "软件产品购置费",
+    "data_purchase": "数据资源和服务购置费",
+    "hardware_purchase": "硬件设备购置费",
+    "implementation": "实施费用",
+    "other_fees": "其他建设费用",
+}
+
+
+def _subtitle(result: dict[str, Any], pack: StandardPack) -> str:
+    return (f"编制依据：{pack.data['standard_doc']}　|　"
+            f"BOM {result['bom_version']}　|　标准包 {pack.pack_id}　|　"
+            f"项目类型 {result['project_type']}　|　"
+            f"计数方法 {result['counting_method']}")
+
+
 def emit_procurement_list(result: dict[str, Any], pack: StandardPack,
                           path: Path) -> None:
-    """01 建设期采购清单 —— 按区域标准的科目树组织。"""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "建设期采购清单"
-    ws.append([f"{result['deal']} 建设期采购清单"])
-    ws.append([f"编制依据：{pack.data['standard_doc']}　|　"
-               f"BOM {result['bom_version']}　|　标准包 {pack.pack_id}　|　"
-               f"项目类型 {result['project_type']}　|　计数方法 {result['counting_method']}"])
-    ws.append([])
-    ws.append(["科目", "明细", "金额（元）", "计算依据", "标准出处"])
+    """Z01 建设期采购清单 —— 按区域标准的科目树组织。
+
+    科目行走 `group()`（不占序号、不进合计），明细行走 `row()`（进合计）。
+    这样末行 `=SUM()` 累加的是明细，与 `construction_total` 对得上；
+    若科目行也计入就会翻倍 —— `total(expect=)` 会当场把这种错拦下来。
+    """
+    wb = gov_sheet.new_workbook()
+    s = gov_sheet.GovSheet(
+        wb, "01_建设期采购清单",
+        title=f"{result['deal']}　建设期采购清单",
+        subtitle=_subtitle(result, pack),
+        columns=[
+            gov_sheet.Col("科目", width=26),
+            gov_sheet.Col("明细", width=46),
+            gov_sheet.Col("金额（元）", "money", width=16, sum=True),
+            gov_sheet.Col("计算依据", width=52),
+        ],
+        clause_required=True)
 
     sw = result["software_dev"]
-    ws.append(["一、软件开发费用", "", sw["total"],
-               f"功能点法：{sw['ufp_total']} UFP → {sw['afp_total']} 调整后功能点 "
-               f"→ {sw['effort_total']} 人月", "三.(一) p.5-8"])
-    for s in sw["systems"]:
-        ws.append(["", f"{s['system']}（{s['dev_category']}）", s["cost"],
-                   f"{s['ufp']} UFP × 系数 → {s['effort_man_months']} 人月 × "
-                   f"¥{s['man_month_rate']:,.2f}/人月", ""])
+    s.group("一、软件开发费用",
+            {"计算依据": f"功能点法：{sw['ufp_total']} UFP → {sw['afp_total']} "
+                         f"调整后功能点 → {sw['effort_total']} 人月"},
+            clause="三.(一) p.5-8")
+    for x in sw["systems"]:
+        s.row({"明细": f"{x['system']}（{x['dev_category']}）",
+               "金额（元）": x["cost"],
+               "计算依据": f"{x['ufp']} UFP × 系数 → {x['effort_man_months']} 人月 × "
+                           f"¥{x['man_month_rate']:,.2f}/人月"},
+              clause="三.(一) p.5-8")
 
     # 二、购置类科目 —— 无价的**列而不计**，不能因为没价格就整节消失。
     # 财评看到没有这一节会认为方案漏项；看到「待询价 9 项」才知道是价格没到位。
@@ -152,113 +187,179 @@ def emit_procurement_list(result: dict[str, Any], pack: StandardPack,
     for g in pur["by_subject"]:
         pend = (f"；其中 {g['pending_count']} 项待询价，未计入金额"
                 if g["pending_count"] else "")
-        ws.append([f"二、{g['subject']}", "", g["total"],
-                   f"{len(g['rows'])} 项{pend}",
-                   "三.(二) p.8-9"])
+        s.group(f"二、{g['subject']}",
+                {"计算依据": f"{len(g['rows'])} 项{pend}"}, clause="三.(二) p.8-9")
         for r in g["rows"]:
             amount = "待询价" if r["reference_unit_price"] is None else r["amount"]
-            ws.append(["", f"{r['name']}（{r['qty']}{r['unit']}"
+            s.row({"明细": f"{r['name']}（{r['qty']}{r['unit']}"
                            f"{'，' + r['pricing_model'] if r['pricing_model'] else ''}）",
-                       amount, r["pricing_basis"], ""])
+                   "金额（元）": amount, "计算依据": r["pricing_basis"]},
+                  clause="三.(二) p.8-9")
 
     hw = result["hardware"]
     if hw["rows"]:
-        ws.append(["二、硬件设备购置费", "", hw["total"],
-                   f"{len(hw['rows'])} 项，按询价基线；{hw['quotes_required_count']} 项需三家询价"
-                   + (f"；其中 {len(hw['pending'])} 项待询价/待选型，未计入金额"
-                      if hw.get("pending") else ""),
-                   "三.(三) p.10-11"])
+        s.group("二、硬件设备购置费",
+                {"计算依据":
+                 f"{len(hw['rows'])} 项，按询价基线；"
+                 f"{hw['quotes_required_count']} 项需三家询价"
+                 + (f"；其中 {len(hw['pending'])} 项待询价/待选型，未计入金额"
+                    if hw.get("pending") else "")},
+                clause="三.(三) p.10-11")
         for r in hw["rows"]:
             amount = "待询价" if r["amount"] is None else r["amount"]
             qty = r["qty"] if r["qty"] is not None else "待定"
-            ws.append(["", f"{r['name']}（{qty}{r['unit']}）", amount,
-                       r["pricing_basis"], ""])
+            s.row({"明细": f"{r['name']}（{qty}{r['unit']}）",
+                   "金额（元）": amount, "计算依据": r["pricing_basis"]},
+                  clause="三.(三) p.10-11")
 
-    ws.append(["三、其他建设费用", "",
-               result["totals"]["other_fees"], "", "三.(四) p.11-13"])
+    # 三、实施费用 —— 此前它只进 construction_total 不进清单，评审逐行加会差
+    # 这一笔（本项目 ¥40,000）。`total(expect=)` 把这个洞照了出来。
+    impl = result.get("implementation") or {"rows": []}
+    if impl["rows"]:
+        s.group("三、实施费用",
+                {"计算依据": f"{len(impl['rows'])} 项，SaaS/订阅形态的建设期接入实施"},
+                clause="三.(二) p.8-9")
+        for r in impl["rows"]:
+            # 只写工作量与用途，**不写 internal-cost-model 里的人天单价**
+            basis = (f"{r['man_days']} 人天　{r['note']}" if r.get("man_days")
+                     else (r.get("basis") or r.get("note") or ""))
+            clause = r["subject"] or "待落位：本形态在本标准中无对应科目（须确认）"
+            s.row({"明细": f"{r['mode_name']}（{r['mode']}）接入实施",
+                   "金额（元）": r["amount"], "计算依据": basis},
+                  clause=clause)
+
+    s.group("四、其他建设费用", clause="三.(四) p.11-13")
     for f in result["other_fees"]:
+        # base 是 totals 的内部键（software_dev/hardware_purchase…），
+        # 直接拼进「计算依据」等于把英文字段名印到公文上。
+        bases = "＋".join(BASE_LABELS.get(b, b) for b in f["base"])
         note = f["blocked_reason"] or (
-            f"以 {'+'.join(f['base'])} {f['base_wan']:,.2f} 万元为基数，"
+            f"以{bases} {f['base_wan']:,.2f} 万元为基数，"
             f"{'超额累进' if f['method'] == 'progressive' else '费率'}")
-        ws.append(["", f["name"], f["amount_yuan"], note,
-                   f"p.{(f.get('citation') or {}).get('page', '')} "
-                   f"{(f.get('citation') or {}).get('section', '')}"])
+        cite = f.get("citation") or {}
+        s.row({"明细": f["name"], "金额（元）": f["amount_yuan"], "计算依据": note},
+              clause=f"p.{cite.get('page', '')} {cite.get('section', '')}".strip()
+                     or "三.(四) p.11-13")
 
-    ws.append([])
-    ws.append(["合计", "", result["totals"]["construction_total"], "", ""])
+    s.total("合计", expect={"金额（元）": result["totals"]["construction_total"]})
 
+    # ---- 以下是「列而不计」的说明区，不参与合计 ----
     if result["scope"]["excluded"]:
-        ws.append([])
+        s.blank()
         # 列而不计 ≠ 不列。范围外的子系统整段消失，财评会认为方案漏项 ——
         # 采购科目那一轮的教训，这里同样适用。
-        ws.append(["【范围说明】未计入本清单的条目", "", "", "列而不计：列出以证明不是漏项", ""])
+        s.note("【范围说明】未计入本清单的条目 —— 列而不计：列出以证明不是漏项")
         for k, v in result["scope"]["excluded"].items():
-            ws.append(["", k, "不计入", f"{v} 条", ""])
+            s.note(f"　　{k}：不计入，{v} 条")
         oos = result["scope"].get("out_of_scope_systems") or []
         if oos:
-            ws.append(["", "本次范围外的子系统", "不计入",
-                       "；".join(f"{s['system']}（{s['items']} 条）" for s in oos), ""])
+            s.note("　　本次范围外的子系统：不计入，"
+                   + "；".join(f"{x['system']}（{x['items']} 条）" for x in oos))
 
     if pur["not_applicable"]:
-        ws.append([])
-        ws.append(["【本方案不采用的采购形态】", "", "", "同一标的的两种表达只能取一种，"
-                   "另一种在此列出以证明不是漏项", ""])
+        s.blank()
+        s.note("【本方案不采用的采购形态】同一标的的两种表达只能取一种，"
+               "另一种在此列出以证明不是漏项")
         by_reason: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for r in pur["not_applicable"]:
             by_reason[f"{r['reason']}（{r['mode']}）"].append(r)
         for reason, rows in sorted(by_reason.items()):
             ref = sum(r.get("legacy_reference_yuan") or 0 for r in rows)
-            note = reason + (f"；raw-input 旧清单对应 ¥{ref:,.0f}（仅供差额归因，"
-                             f"非定价依据）" if ref else "")
-            ws.append(["", f"{rows[0]['subject']}　{len(rows)} 项", "不计入", note, ""])
+            tail = (f"；raw-input 旧清单对应 ¥{ref:,.0f}（仅供差额归因，非定价依据）"
+                    if ref else "")
+            s.note(f"　　{rows[0]['subject']}　{len(rows)} 项：不计入。{reason}{tail}")
 
     if pur["pending"]:
-        ws.append([])
-        ws.append([f"【待询价】{len(pur['pending'])} 项已列入清单但未计金额，"
-                   f"出正式报价前须补齐盖章询价报价单"])
+        s.blank()
+        s.note(f"【待询价】{len(pur['pending'])} 项已列入清单但未计金额，"
+               f"出正式报价前须补齐盖章询价报价单")
         for r in pur["pending"]:
-            ws.append(["", r["name"], "待询价", r["note"], ""])
+            s.note(f"　　{r['name']}：待询价。{r['note']}")
 
-    wb.save(path)
-    excel_styler.style_workbook(path)
+    s.finish()
+    gov_sheet.save(wb, path)
 
 
 def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
-                      deal: DealConfig, path: Path) -> None:
+                      deal: DealConfig, path: Path,
+                      delivery: DeliveryContext | None = None) -> None:
     """02 功能点测算表 —— 逐条目可复算。
 
     不依赖单元格布局：数值全部由引擎算定后写入，另附「复算公式」文本列。
     """
     from costing_engine import CostingEngine
 
-    engine = CostingEngine(bom, pack, deal)
+    # **必须带上 delivery** —— 此前这里另建了一个无交付方案的引擎，
+    # 于是明细表的形态过滤全部失效：汇总按 CE-DEV 过滤得 11,105.10 FP，
+    # 明细却把订阅形态的条目也算进去得 12,022.18，两张表在同一个文件里
+    # 各说各话，且没有任何地方报错。
+    engine = CostingEngine(bom, pack, deal, delivery)
     items, _ = engine.in_scope()
     method = deal.counting_method
     size_f = pack.factor("size_change", method)
 
-    wb = openpyxl.Workbook()
+    wb = gov_sheet.new_workbook()
+    sw = result["software_dev"]
+    sub = _subtitle(result, pack)
+    _, w_cite = pack.value(f"fp_counting.{method}.weights")
+    fp_clause = str(w_cite)
 
-    ws = wb.active
-    ws.title = "参数"
-    ws.append(["参数", "取值", "出处"])
-    for label, dotted in [
-        ("规模变更因子", f"factors.size_change.values.{method}"),
-        ("软件开发生产率（人时/FP）", "rates.productivity_hours_per_fp"),
-        ("人月折算系数（人时/人月）", "rates.man_hours_per_month"),
-        ("基准人月费率（元/人月）", "rates.base_man_month_rate"),
-    ]:
-        v, c = pack.value(dotted)
-        ws.append([label, v, str(c)])
-    weights, w_cite = pack.value(f"fp_counting.{method}.weights")
-    ws.append(["功能点权重", "、".join(f"{k}={n}" for k, n in weights.items()),
-               str(w_cite)])
+    # 汇总排在明细之前 —— 评审打开文件先看钱，不该先撞上 1738 行明细。
+    smy = gov_sheet.GovSheet(
+        wb, "00_测算汇总", title=f"{result['deal']}　软件开发费测算汇总",
+        subtitle=sub,
+        columns=[
+            gov_sheet.Col("子系统", width=40),
+            gov_sheet.Col("开发类别", width=18),
+            gov_sheet.Col("条目数", "int", width=9, sum=True),
+            gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("开发工作量（人月）", "fp", width=15, sum=True),
+            gov_sheet.Col("人月费率（元）", "money", width=15),
+            gov_sheet.Col("软件开发费用（元）", "money", width=17, sum=True),
+            gov_sheet.Col("功能点类型分布", width=30),
+        ],
+        clause_required=True)
+    for x in sw["systems"]:
+        smy.row({"子系统": x["system"], "开发类别": x["dev_category"],
+                 "条目数": x["items"], "未调整功能点": x["ufp"],
+                 "调整后功能点": x["afp"],
+                 "开发工作量（人月）": x["effort_man_months"],
+                 "人月费率（元）": x["man_month_rate"],
+                 "软件开发费用（元）": x["cost"],
+                 # dict 直接进单元格会变成 Python repr —— gov_sheet 会拦，
+                 # 这里显式摊平成人能读的文本。
+                 "功能点类型分布": gov_sheet.flatten_counts(x["by_type"])},
+                clause=fp_clause)
+    smy.total("合计", expect={"未调整功能点": sw["ufp_total"],
+                              "调整后功能点": sw["afp_total"],
+                              "软件开发费用（元）": sw["total"]})
+    smy.finish()
 
-    det = wb.create_sheet("功能点明细")
-    det.append(["条目ID", "系统", "名称", "类型", "未调整功能点", "规模变更因子",
-                "产品成熟度", "复用度档位", "复用度因子", "应用类型因子",
-                "调整后功能点", "复算公式"])
+    det = gov_sheet.GovSheet(
+        wb, "01_功能点明细", title=f"{result['deal']}　功能点测算明细",
+        subtitle=sub + "　|　「复算式」为活公式，可现场点开核验",
+        columns=[
+            gov_sheet.Col("条目编号", width=18),
+            gov_sheet.Col("子系统", width=34),
+            gov_sheet.Col("功能点名称", width=34),
+            gov_sheet.Col("功能点类型", width=11),
+            gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("规模变更因子", "rate", width=13),
+            gov_sheet.Col("产品成熟度", width=12),
+            gov_sheet.Col("复用度档位", width=14),
+            gov_sheet.Col("复用度因子", "rate", width=12),
+            gov_sheet.Col("应用类型因子", "rate", width=13),
+            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("复算式", "fp", width=16),
+            gov_sheet.Col("交付形态", width=18),
+            gov_sheet.Col("计入软件开发费", width=13),
+            gov_sheet.Col("计入开发费功能点", "fp", width=15, sum=True),
+        ],
+        clause_required=True)
+    n_excluded = 0
     for i in items:
-        if i.cls not in FP_COUNTED_CLASSES or not i.nesma:
+        if not is_fp_counted(i):
             continue
         w = pack.fp_weight(method, i.nesma.type)
         app_f = pack.factor("app_type", i.app_type or "业务处理")
@@ -268,23 +369,78 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
         afp = engine.profile.adjusted_fp(
             w, pack=pack, counting_method=method,
             reuse_level=lvl, app_type=i.app_type or "业务处理")
-        det.append([i.id, i.path.system, i.name, i.nesma.type, w,
-                    size_f, i.maturity, lvl, reuse_f, app_f, afp,
-                    f"={w}*{size_f}*{reuse_f}*{app_f}"])
+        # 「复算式」写的是活公式，Excel 会自己算。它算出来的必须等于引擎的
+        # 调整后功能点，否则评审点开就看见同一行有两个不一样的数。
+        #
+        # 公式里必须带 ROUND(...,2) —— 引擎逐条目做 xlround(...,2)，裸乘积
+        # 会差半分（5×1.21×1.5 = 9.075 vs 引擎 9.08）。Excel 的 ROUND 是
+        # 四舍五入（半数远离零），与 xlround 同语义，两边这才真的等价。
+        # 飞书那版 US 公式漏 ROUND 也是同一处毛病。
+        if abs(xlround(w * size_f * reuse_f * app_f, 2) - afp) > 0.0001:
+            raise gov_sheet.GovSheetError(
+                f"{i.id}：复算式与引擎值不符 —— "
+                f"ROUND({w}×{size_f}×{reuse_f}×{app_f}, 2) = "
+                f"{xlround(w * size_f * reuse_f * app_f, 2)}，引擎给 {afp}。\n"
+                f"  表里那一列是活公式，写进去就等于把这个矛盾摆给评审看。")
+        # 明细列的是全部在范围条目，汇总只算走 CE-DEV 的那批（订阅/买断形态
+        # 不按功能点法计价）。两者差 900 多 FP —— 不写出来，评审自己加会
+        # 发现明细与汇总对不上，而表里没有任何地方解释这个差。
+        ce = engine._construction_elements(i)
+        counted = ce is None or "CE-DEV" in ce
+        mode = (engine.delivery.assigned.get(i.id) if engine.delivery else None)
+        mode_name = (engine.delivery.modes.get(mode, {}).get("name", mode)
+                     if mode else "按功能点法开发")
+        if not counted:
+            n_excluded += 1
+        det.row({"条目编号": i.id, "子系统": i.path.system, "功能点名称": i.name,
+                 "功能点类型": i.nesma.type, "未调整功能点": w,
+                 "规模变更因子": size_f,
+                 # existing/new 是内部枚举，公文里要用中文
+                 "产品成熟度": gov_sheet.label(i.maturity),
+                 "复用度档位": lvl, "复用度因子": reuse_f, "应用类型因子": app_f,
+                 "调整后功能点": afp,
+                 "复算式": f"=ROUND({w}*{size_f}*{reuse_f}*{app_f},2)",
+                 "交付形态": f"{mode_name}（{mode}）" if mode else mode_name,
+                 "计入软件开发费": "是" if counted else "否",
+                 "计入开发费功能点": afp if counted else None},
+                clause=fp_clause)
+    det.total("合计", expect={"计入开发费功能点": sw["afp_total"]})
+    det.note(
+        f"　口径说明：本表列出全部在范围功能点条目共 {det.seq_count} 条；其中 "
+        f"{n_excluded} 条按订阅/买断形态交付，**不走功能点法计价**，"
+        f"故「计入开发费功能点」列为空。")
+    det.note(
+        f"　「调整后功能点」列合计 = 全部条目规模；"
+        f"「计入开发费功能点」列合计 = {sw['afp_total']:,.2f} = "
+        f"00_测算汇总的调整后功能点合计。两列之差即订阅/买断形态的规模，"
+        f"列而不计 —— 列出以证明不是漏项。")
+    det.finish()
 
-    smy = wb.create_sheet("测算汇总")
-    smy.append(["系统", "开发类别", "条目数", "未调整功能点", "调整后功能点",
-                "开发工作量（人月）", "人月费率（元）", "软件开发费用（元）", "类型分布"])
-    for s in result["software_dev"]["systems"]:
-        smy.append([s["system"], s["dev_category"], s["items"], s["ufp"], s["afp"],
-                    s["effort_man_months"], s["man_month_rate"], s["cost"],
-                    str(s["by_type"])])
-    sw = result["software_dev"]
-    smy.append(["合计", "", "", sw["ufp_total"], sw["afp_total"],
-                sw["effort_total"], "", sw["total"], ""])
+    par = gov_sheet.GovSheet(
+        wb, "02_计价参数", title=f"{result['deal']}　计价参数与依据",
+        subtitle="每个取值均标注标准原文页码与条款，供评审逐项核对",
+        columns=[
+            gov_sheet.Col("参数", width=28),
+            gov_sheet.Col("取值", width=34),
+            gov_sheet.Col("标准出处", width=34),
+        ],
+        clause_required=True, clause_name="标准出处")
+    for lb, dotted in [
+        ("规模变更因子", f"factors.size_change.values.{method}"),
+        ("软件开发生产率（人时/FP）", "rates.productivity_hours_per_fp"),
+        ("人月折算系数（人时/人月）", "rates.man_hours_per_month"),
+        ("基准人月费率（元/人月）", "rates.base_man_month_rate"),
+    ]:
+        v, c = pack.value(dotted)
+        par.row({"参数": lb, "取值": v}, clause=str(c))
+    weights, w_cite2 = pack.value(f"fp_counting.{method}.weights")
+    par.row({"参数": "功能点权重",
+             "取值": "、".join(f"{k}={n}" for k, n in weights.items())},
+            clause=str(w_cite2))
+    par.finish()
 
-    wb.save(path)
-    excel_styler.style_workbook(path)
+    gov_sheet.save(wb, path,
+                   sheets_expected=["00_测算汇总", "01_功能点明细", "02_计价参数"])
 
 
 def _procurement_notes(pur: dict[str, Any]) -> list[str]:
@@ -478,62 +634,149 @@ def emit_ops_list(ops_lines, violations, path: Path) -> None:
     （"运维怎么办"答不上来）；计入则超出本标准科目范围会被划掉。
     列而不计并说明另行立项，才是正确做法。
     """
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "运营期费用清单"
-    ws.append(["运营期费用清单"])
-    ws.append(["in_scope=是 的行计入本次采购预算；=否 的行须另行立项或由客户直付，"
-               "此处列出以保证方案完整"])
-    ws.append([])
-    ws.append(["成本元素", "名称", "范围", "交付形态", "年度金额（元）",
-               "付款对象", "计入本次采购", "测算依据", "说明"])
+    wb = gov_sheet.new_workbook()
+    s = gov_sheet.GovSheet(
+        wb, "01_运营期费用清单", title="运营期费用清单",
+        subtitle="「计入本次采购」=是 的行计入本次采购预算；=否 的行须另行立项"
+                 "或由客户直付，此处列出以保证方案完整",
+        columns=[
+            gov_sheet.Col("成本元素", width=12),
+            gov_sheet.Col("名称", width=26),
+            gov_sheet.Col("范围", width=30),
+            gov_sheet.Col("交付形态", width=12),
+            gov_sheet.Col("年度金额（元）", "money", width=16, sum=True),
+            gov_sheet.Col("付款对象", width=16),
+            gov_sheet.Col("计入本次采购", width=12),
+            gov_sheet.Col("测算依据", width=40),
+            gov_sheet.Col("说明", width=34),
+        ],
+        clause_required=False)
     for l in ops_lines:
-        ws.append([l.element, l.element_name, l.scope, l.mode, l.annual_yuan,
-                   l.payee, "是" if l.in_scope else "否", l.basis, l.note])
-    ws.append([])
-    ws.append(["合计（全部）", "", "", "",
-               sum(l.annual_yuan for l in ops_lines), "", "", "", ""])
-    ws.append(["其中计入本次采购", "", "", "",
-               sum(l.annual_yuan for l in ops_lines if l.in_scope), "", "", "", ""])
+        s.row({"成本元素": l.element, "名称": l.element_name, "范围": l.scope,
+               "交付形态": l.mode, "年度金额（元）": l.annual_yuan,
+               "付款对象": l.payee,
+               "计入本次采购": "是" if l.in_scope else "否",
+               "测算依据": l.basis, "说明": l.note})
+    s.total("合计（全部）",
+            expect={"年度金额（元）": sum(l.annual_yuan for l in ops_lines)})
+    s.note(f"　其中计入本次采购："
+           f"¥{sum(l.annual_yuan for l in ops_lines if l.in_scope):,.2f}；"
+           f"其余由客户直付或须另行立项。")
+    s.finish()
 
     if violations:
-        vs = wb.create_sheet("一致性检查")
-        vs.append(["规则", "级别", "说明"])
-        for v in violations:
-            vs.append([v.rule, v.severity, v.message])
-    wb.save(path)
-    excel_styler.style_workbook(path)
+        v = gov_sheet.GovSheet(
+            wb, "02_一致性检查", title="交付方案一致性检查",
+            subtitle="规则编号见 delivery-modes/modes.yaml 的 consistency_rules",
+            columns=[gov_sheet.Col("规则", width=10),
+                     gov_sheet.Col("级别", width=10),
+                     gov_sheet.Col("说明", width=90)])
+        for x in violations:
+            # severity 是 warn/fail 这类内部枚举，公文里要中文
+            v.row({"规则": x.rule, "级别": gov_sheet.label(x.severity),
+                   "说明": x.message})
+        v.finish()
+    gov_sheet.save(wb, path)
 
 
 def emit_tco(comparisons: list[dict], path: Path) -> None:
-    """04 TCO 对比 —— 对客户最有说服力的一张表。"""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "TCO对比"
-    ws.append(["交付方式 TCO 对比"])
-    ws.append(["建设期为一次性投入；运营期按年计，5 年累计"])
-    ws.append([])
+    """04 TCO 对比 —— 对客户最有说服力的一张表。
+
+    这张表**不写合计** —— 各行是互斥的备选方案，纵向相加没有意义。
+    `GovSheet` 不强制合计行正是为了这种表。
+    """
+    wb = gov_sheet.new_workbook()
     payees = sorted({p for c in comparisons for p in c["tco5"]["annual_by_payee"]})
-    ws.append(["方案", "说明", "建设期（元）", "年度经常性（元）",
-               *[f"　其中付{p}" for p in payees], "3年TCO（元）", "5年TCO（元）"])
+    s = gov_sheet.GovSheet(
+        wb, "01_TCO对比", title="交付方式 TCO 对比",
+        subtitle="建设期为一次性投入；运营期按年计。各行为互斥备选方案，"
+                 "不设合计。",
+        columns=[
+            gov_sheet.Col("方案", width=22),
+            gov_sheet.Col("说明", width=40),
+            gov_sheet.Col("建设期（元）", "money", width=16),
+            gov_sheet.Col("年度经常性（元）", "money", width=16),
+            *[gov_sheet.Col(f"其中付{p}（元）", "money", width=16) for p in payees],
+            gov_sheet.Col("3年TCO（元）", "money", width=16),
+            gov_sheet.Col("5年TCO（元）", "money", width=16),
+        ])
     for c in comparisons:
         t3, t5 = c["tco3"], c["tco5"]
-        ws.append([c["name"], c["description"], t5["construction"], t5["annual_total"],
-                   *[t5["annual_by_payee"].get(p, 0) for p in payees],
-                   t3["tco"], t5["tco"]])
-    ws.append([])
+        s.row({"方案": c["name"], "说明": c["description"],
+               "建设期（元）": t5["construction"],
+               "年度经常性（元）": t5["annual_total"],
+               **{f"其中付{p}（元）": t5["annual_by_payee"].get(p, 0)
+                  for p in payees},
+               "3年TCO（元）": t3["tco"], "5年TCO（元）": t5["tco"]})
     best = min(comparisons, key=lambda c: c["tco5"]["tco"])
-    ws.append([f"5 年 TCO 最低：{best['name']}（¥{best['tco5']['tco']:,.2f}）"])
+    s.blank()
+    s.note(f"　5 年 TCO 最低：{best['name']}（¥{best['tco5']['tco']:,.2f}）")
+    s.finish()
 
     gaps = [g for c in comparisons for g in c.get("gaps", [])]
     if gaps:
-        gs = wb.create_sheet("待核价与缺口")
-        gs.append(["方案", "类型", "说明"])
+        g = gov_sheet.GovSheet(
+            wb, "02_待核价与缺口", title="待核价与缺口",
+            subtitle="以下项目未计入上表金额，出正式报价前须补齐",
+            columns=[gov_sheet.Col("方案", width=22),
+                     gov_sheet.Col("类型", width=12),
+                     gov_sheet.Col("说明", width=80)])
         for c in comparisons:
-            for g in c.get("gaps", []):
-                gs.append([c["name"], g["kind"], g["note"]])
-    wb.save(path)
-    excel_styler.style_workbook(path)
+            for x in c.get("gaps", []):
+                g.row({"方案": c["name"], "类型": gov_sheet.label(x["kind"]),
+                       "说明": x["note"]})
+        g.finish()
+    gov_sheet.save(wb, path)
+
+
+def emit_summary(result: dict[str, Any], pack: StandardPack,
+                 files: list[tuple[str, str]], path: Path) -> None:
+    """Z00 项目总报价汇总 —— 参考包里最先被打开的一册，我们此前没有。
+
+    评审拿到一叠附件，先要一页纸看清「总共多少钱、由哪几大类构成、每类
+    依据哪条标准」。此前我们只给 4 份明细，没有这一页，读的人得自己把
+    4 个文件的合计抄下来相加。
+    """
+    t = result["totals"]
+    rows = [
+        ("软件开发费（定制）", t["software_dev"], "三.(一).2.1 定制软件功能点法"),
+        ("软件产品购置费", t["software_purchase"], "三.(二).1 软件产品购置费"),
+        ("数据资源和服务购置费", t["data_purchase"], "三.(二).2 数据资源和服务购置费"),
+        ("硬件设备购置费", t["hardware_purchase"], "三.(三) 硬件设备购置费"),
+        ("实施费用", t.get("implementation", 0.0), "三.(二) 接入实施"),
+        ("其他建设费用", t["other_fees"], "三.(四) 其他建设费用"),
+    ]
+    wb = gov_sheet.new_workbook()
+    total = t["construction_total"]
+    s = gov_sheet.GovSheet(
+        wb, "00_项目总报价汇总", title=f"{result['deal']}　项目总报价汇总",
+        subtitle=_subtitle(result, pack),
+        columns=[
+            gov_sheet.Col("费用大类", width=34),
+            gov_sheet.Col("金额（元）", "money", width=18, sum=True),
+            gov_sheet.Col("占比", "pct", width=10),
+        ],
+        clause_required=True)
+    for name, amount, clause in rows:
+        s.row({"费用大类": name, "金额（元）": amount,
+               "占比": (amount / total) if total else 0}, clause=clause)
+    s.total("合计", expect={"金额（元）": total})
+    if t.get("pending_pricing_count"):
+        s.blank()
+        s.note(f"　注：另有 {t['pending_pricing_count']} 项已列入清单但**未计金额**"
+               f"（待询价/待选型），见 Z01 建设期采购清单末节。"
+               f"上表合计不含这些项目。")
+    s.finish()
+
+    idx = gov_sheet.GovSheet(
+        wb, "01_关联附件", title="关联附件清单",
+        subtitle="本册为汇总，明细见以下附件",
+        columns=[gov_sheet.Col("文件名", width=56),
+                 gov_sheet.Col("用途", width=56)])
+    for fname, purpose in files:
+        idx.row({"文件名": fname, "用途": purpose})
+    idx.finish()
+    gov_sheet.save(wb, path)
 
 
 def main() -> None:
@@ -563,6 +806,10 @@ def main() -> None:
                     help="本项目在上述因子上的选择（yaml）")
     ap.add_argument("--scenarios", type=Path, nargs="*", default=[],
                     help="用于 TCO 对比的场景预设")
+    ap.add_argument("--doc-prefix", help="送审文件名的项目简称，默认取 --deal-id")
+    ap.add_argument("--doc-date", help="送审文件名的日期（YYYYMMDD），默认今天")
+    ap.add_argument("--doc-status", default="正式版",
+                    help="送审文件名的版本状态，如 征求意见稿/送审稿/正式版")
     ap.add_argument("--publish-lark", metavar="FOLDER_TOKEN",
                     help="把生成的 xlsx 导入飞书文件夹供在线查看（快照，非维护对象）")
     ap.add_argument("--allow-rule-violations", action="store_true",
@@ -642,9 +889,25 @@ def main() -> None:
     out = args.out / "out"
     out.mkdir(parents=True, exist_ok=True)
 
-    emit_procurement_list(result, pack, out / "01-建设期采购清单.xlsx")
-    emit_fp_worksheet(bom, result, pack, deal, out / "02-功能点测算表.xlsx")
-    emit_notes(bom, result, pack, deal, out / "05-编制说明.md",
+    # 送审包命名：`{项目简称}_{册号}_{内容}_{状态}_v{BOM版本}_{日期}.xlsx`
+    # 抄自柳州送审包 —— 评审在几十份附件里靠文件名定位，`01-建设期采购清单.xlsx`
+    # 既没有项目也没有版本，两个项目的附件混进一个目录就分不出来。
+    pfx = args.doc_prefix or result["deal"]
+    dt = args.doc_date or date.today().strftime("%Y%m%d")
+    ver = result["bom_version"]
+
+    def name(no: str, topic: str) -> Path:
+        return out / gov_sheet.doc_name(pfx, no, topic, ver, dt, args.doc_status)
+
+    f_sum = name("Z00", "项目总报价汇总")
+    f_pro = name("Z01", "建设期采购清单")
+    f_fp = name("Z02", "功能点测算表")
+    f_ops = name("Z03", "运营期费用清单")
+    f_tco = name("Z04", "交付方式TCO对比")
+
+    emit_procurement_list(result, pack, f_pro)
+    emit_fp_worksheet(bom, result, pack, deal, f_fp, delivery)
+    emit_notes(bom, result, pack, deal, out / "Z05-编制说明.md",
                rule_violations=violations)
     (args.out / "deal.lock.json").write_text(
         json.dumps(lock(result, bom, pack, deal, baseline_lock),
@@ -657,7 +920,7 @@ def main() -> None:
         base_items, _ = CostingEngine(bom, pack, deal).in_scope()
         om = OpsModel.load(args.modes, args.internal_cost)
         ops = om.expand(base_items, delivery.assigned)
-        emit_ops_list(ops, violations, out / "03-运营期费用清单.xlsx")
+        emit_ops_list(ops, violations, f_ops)
 
 
         comparisons = []
@@ -688,7 +951,7 @@ def main() -> None:
                 "tco3": tco(cons2, ops2, 3), "tco5": tco(cons2, ops2, 5),
                 "gaps": gaps})
         if comparisons:
-            emit_tco(comparisons, out / "04-TCO对比.xlsx")
+            emit_tco(comparisons, f_tco)
             (out / "tco-comparison.json").write_text(
                 json.dumps(comparisons, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -696,6 +959,17 @@ def main() -> None:
         for m in margins:
             print(f"  ⚠ 订阅毛利预警：{m['kind']} 毛利 {m['margin']:.1%} "
                   f"低于阈值 {m['threshold']:.0%}（内部信息，未写入对外文档）")
+
+    # Z00 汇总册最后生成 —— 它的附件索引要引用其余各册的**实际文件名**
+    attachments = [(f_pro.name, "按标准科目树组织的建设期逐项清单，"
+                                "含「列而不计」与「待询价」两节"),
+                   (f_fp.name, "功能点逐条测算明细 + 分子系统汇总 + 计价参数与出处")]
+    if f_ops.exists():
+        attachments.append((f_ops.name, "运营期逐项费用 + 交付方案一致性检查"))
+    if f_tco.exists():
+        attachments.append((f_tco.name, "各交付方式的 3 年 / 5 年 TCO 对比"))
+    attachments.append(("Z05-编制说明.md", "计数方法、参数取值与出处、假设与边界"))
+    emit_summary(result, pack, attachments, f_sum)
 
     t = result["totals"]
     print(f"BOM {result['bom_version']} × {pack.pack_id} × {deal.project_type}项目")

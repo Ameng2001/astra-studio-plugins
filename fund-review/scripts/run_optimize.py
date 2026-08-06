@@ -167,12 +167,20 @@ def build_fp_table(quote: dict, out_xlsx: str) -> dict:
         # 此前这里用 wb.kind ∈ {platform,llm} 的白名单，kind=unknown 全被排除，
         # 而那正是最常见的情况：实测一份真实报价整簿 unknown，反推 FP 归零。
         rs.observe(row["cells"])
+        # 表里已经写明 FP 就直接用 —— 倒推是给「只给人天不给 FP」的外部报价
+        # 用的兜底。我们自己生成的送审表直接给 FP、没有人天列，一律走倒推
+        # 会得 0：这正是本文件顶上那份「静默出 0」清单的第六种写法。
+        explicit_fp = rs.get(row["cells"], "fp")
         person_days = rs.get(row["cells"], "person_days")
-        if not isinstance(person_days, (int, float)) or person_days <= 0:
+        if isinstance(explicit_fp, (int, float)) and explicit_fp > 0:
+            fp = int(round(explicit_fp))
+            person_days = person_days if isinstance(person_days, (int, float)) else ""
+        elif isinstance(person_days, (int, float)) and person_days > 0:
+            fp = derive_fp_from_person_days(person_days)
+        else:
             continue
         detail = rs.get(row["cells"], "detail", numeric=False) or ""
         category, reuse = classify_fp_row(str(detail), sh["name"], wb["kind"])
-        fp = derive_fp_from_person_days(person_days)
         lo, hi = fp_to_cost_range(fp, category, reuse)
         seq += 1
         by_cat[category] = by_cat.get(category, 0) + fp
@@ -196,8 +204,10 @@ def build_fp_table(quote: dict, out_xlsx: str) -> dict:
     for cat, fp in by_cat.items():
         ws.append([None, None, None, None, f"  - {cat}", None, fp])
     ws.append([])
-    ws.append([None, None, None, None, "[说明] FP 由「人天」按 PDF p.13 公式 (FP×6.51/8) 反推；"
-               "NESMA 分类按描述文本启发式估算，研发期应按 SJ/T 11619-2016 重新计数。"])
+    ws.append([None, None, None, None,
+               "[说明] 表内已写明功能点的行直接取用；只给人天的行按 PDF p.13 "
+               "公式 (FP×6.51/8) 反推。NESMA 分类按描述文本启发式估算，"
+               "研发期应按 SJ/T 11619-2016 重新计数。"])
     wb_out.save(out_xlsx)
     return {
         "fp_table_path": out_xlsx,
@@ -239,7 +249,7 @@ def main(session_dir: str) -> None:
     if fp_table["total_fp"] == 0:
         # 同上：0 个功能点是**可能的**（纯硬件报价），但绝大多数情况是没认出来。
         # 不硬失败（免得挡住合法场景），但必须显式说，不能让它混进 summary 装作正常。
-        print("  ⚠ 反推功能点合计为 0 —— 若本报价确有软件开发内容，"
+        print("  ⚠ 功能点合计为 0 —— 若本报价确有软件开发内容，"
               "说明「人天/人/天」列未被识别，或 sheet.kind 判定有误。"
               "检查 parse_quote 的 kind 判定与列名。", file=sys.stderr)
     _append_split_detail(str(s / "feasibility-fp-table.xlsx"),

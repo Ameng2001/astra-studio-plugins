@@ -164,7 +164,7 @@ class DeliveryPlan:
         if bad:
             r7 = self.rules["R-7"]
             out.append(Violation("R-7", r7["severity"],
-                                 f"{len(bad)} 条 maturity=existing 走 D1（按新开发报价）—— "
+                                 f"{len(bad)} 条产品成熟度=已有产品 走 D1（按新开发报价）—— "
                                  f"{r7.get('note', '').strip().splitlines()[0]}", bad[:5]))
 
         # R-8 区域支持

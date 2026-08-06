@@ -318,6 +318,131 @@ got = [(sh["name"]) for _wb, sh, _r in qs.iter_priceable_rows(QUOTE)]
 check("迭代器排除 summary 与 standard，保留 unknown", got, ["s1"])
 
 
+# ============================================================================
+# gov_sheet —— 送审表结构守卫
+#
+# 这一组防的不是「算错」，是「算对了但印成不能送审的样子」：
+# Python dict 的 repr 落进单元格、英文枚举没翻译、明细行没有条款出处、
+# 末行写了活 =SUM() 却和引擎的数对不上。前三个 excel_styler 那种事后
+# 遍历改字体的做法完全看不见，第四个更糟 —— 它把矛盾直接摆给评审。
+# ============================================================================
+import gov_sheet as gs
+
+
+def _sheet(**kw):
+    wb = gs.new_workbook()
+    kw.setdefault("title", "T")
+    kw.setdefault("columns", [gs.Col("名称"), gs.Col("金额（元）", "money", sum=True)])
+    return wb, gs.GovSheet(wb, kw.pop("name", "01_t"), **kw)
+
+
+# --- 容器进单元格 ---
+_, s = _sheet()
+raises("dict 进单元格要报错（Python repr 泄漏到公文）",
+       lambda: s.row({"名称": {"EI": 66, "EQ": 48}, "金额（元）": 1}),
+       gs.GovSheetError, "容器")
+_, s = _sheet()
+raises("list 进单元格同样要报错",
+       lambda: s.row({"名称": ["a", "b"], "金额（元）": 1}),
+       gs.GovSheetError, "容器")
+check("flatten_counts 给出可读文本",
+      gs.flatten_counts({"EI": 66, "EQ": 48}), "EI 66 / EQ 48")
+
+# --- 未翻译的枚举 ---
+_, s = _sheet()
+raises("裸小写枚举要报错", lambda: s.row({"名称": "existing", "金额（元）": 1}),
+       gs.GovSheetError, "枚举")
+check("label() 译得出已登记的枚举", gs.label("existing"), "已有产品")
+check("label() 不动非枚举", gs.label("多角色业务应用"), "多角色业务应用")
+# 编号不是枚举，不能误伤
+_, s = _sheet()
+for ident in ("FP.APP.GOV.0001", "D5", "v0.17.0", "R-7"):
+    s.row({"名称": ident, "金额（元）": 1})
+check("编号形态不被当成枚举误拦", s.seq_count, 4)
+
+# --- 明细行必须带条款出处 ---
+_, s = _sheet(clause_required=True)
+raises("明细行缺条款出处要报错",
+       lambda: s.row({"名称": "某项", "金额（元）": 1}),
+       gs.GovSheetError, "标准条款")
+s.row({"名称": "某项", "金额（元）": 1}, clause="三.(一).2.1")
+check("给了条款就能写", s.seq_count, 1)
+
+# --- 未声明的列不能悄悄丢掉 ---
+_, s = _sheet()
+raises("写未声明的列要报错（否则那一格静默消失）",
+       lambda: s.row({"名称": "某项", "不存在的列": 1}),
+       gs.GovSheetError, "未声明")
+
+# raw() 是显式逃生口：确实要照原样印的小写英文
+_, s = _sheet()
+s.row({"名称": gs.raw("kubernetes"), "金额（元）": 1})
+check("raw() 放行确认过的英文专名", s.ws.cell(3, 2).value, "kubernetes")
+
+# --- 合计：活公式必须与引擎值一致 ---
+_, s = _sheet()
+for v in (100.0, 200.0, 300.0):
+    s.row({"名称": "某项", "金额（元）": v})
+raises("合计与引擎值不符要硬失败", lambda: s.total(expect={"金额（元）": 999.0}),
+       gs.GovSheetError, "合计行与引擎值不符")
+_, s2 = _sheet()
+for v in (100.0, 200.0, 300.0):
+    s2.row({"名称": "某项", "金额（元）": v})
+r = s2.total(expect={"金额（元）": 600.0})
+check("合计对得上就正常写出", s2.ws.cell(r, 3).value, "=SUM(C3:C5)")
+check("合计标签落在第一个非序号列", s2.ws.cell(r, 2).value, "合计")
+# 科目行不进合计 —— 进了就会翻倍
+_, s3 = _sheet()
+s3.group("一、某科目", {"金额（元）": 600.0})
+for v in (100.0, 200.0, 300.0):
+    s3.row({"名称": "某项", "金额（元）": v})
+s3.total(expect={"金额（元）": 600.0})          # 科目行的 600 不该被算进去
+check("科目行不占序号", s3.seq_count, 3)
+_, s4 = _sheet()
+raises("没有数据行就写合计要报错", lambda: s4.total(), gs.GovSheetError, "没有数据行")
+
+# --- 结构：序号列、冻结、打印标题 ---
+wb, s5 = _sheet(subtitle="副标题")
+s5.row({"名称": "某项", "金额（元）": 1})
+s5.finish()
+check("序号列自动加在最前", s5.ws.cell(s5.header_row, 1).value, "序号")
+check("有副标题时表头在第 3 行", s5.header_row, 3)
+check("冻结在表头之下", s5.ws.freeze_panes, "A4")
+check("打印时表头逐页重复", s5.ws.print_title_rows, "$3:$3")
+check("金额列右对齐千分位",
+      s5.ws.cell(4, 3).number_format, "#,##0.00")
+# 无副标题时表头上移
+_, s6 = _sheet()
+check("无副标题时表头在第 2 行", s6.header_row, 2)
+
+# --- 未知 fmt 要当场报错，不能静默按文本处理 ---
+raises("未知列格式要报错", lambda: gs.Col("某列", "moneyy"), gs.GovSheetError, "fmt")
+
+# --- 送审文件名 ---
+check("送审文件名格式",
+      gs.doc_name("数智康养", "Z01", "建设期采购清单", "0.17.0", "20260806"),
+      "数智康养_Z01_建设期采购清单_正式版_v0.17.0_20260806.xlsx")
+
+# --- 缺表要报错 ---
+wb7 = gs.new_workbook()
+raises("空工作簿不能保存", lambda: gs.save(wb7, Path("/tmp/x.xlsx")),
+       gs.GovSheetError, "一张表都没有")
+
+
+
+# --- 表里已写明 FP 就不该再从人天倒推 ---
+# 送审格式改版时撞上的第六种「静默出 0」：新表按功能点给数、没有人天列，
+# build_fp_table 一律走倒推 → total_fp 0，而报告照印。
+rs_fp = qs.Resolver()
+cells_fp = {"调整后功能点": 9.08, "未调整功能点": 5}
+check("显式 FP 列能被认出", rs_fp.get(cells_fp, "fp"), 9.08)
+check("没有人天列时人天取不到", rs_fp.get(cells_fp, "person_days"), None)
+# 优先级：显式 FP 在前，未调整功能点在后
+check("优先取调整后功能点",
+      qs.Resolver().get({"未调整功能点": 5, "调整后功能点": 9.08}, "fp"), 9.08)
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:

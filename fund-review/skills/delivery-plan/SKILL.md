@@ -58,7 +58,7 @@ PYTHONPATH=$PLUG python3 $PLUG/quote_generate.py \
   --scenarios delivery-modes/scenarios/*.yaml
 ```
 
-产出 `03-运营期费用清单.xlsx` 与 `04-TCO对比.xlsx`。
+产出 `…_Z03_运营期费用清单_….xlsx` 与 `…_Z04_交付方式TCO对比_….xlsx`。
 
 ## 三条容易做错的地方
 

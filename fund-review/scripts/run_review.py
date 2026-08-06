@@ -219,8 +219,10 @@ def main(session_dir: str, target: str = "original") -> None:
     ref_index: dict[tuple[str, int], int] = defaultdict(int)
 
     shape = quote_shape.Resolver()
+    rows_scanned = 0
     for wb, sh, row in quote_shape.iter_priceable_rows(quote):
             shape.observe(row["cells"])
+            rows_scanned += 1
             fs = review_row(wb["kind"], sh["name"], sh["kind"], row["cells"])
             for f in fs:
                 counts[f["severity"]] += 1
@@ -240,9 +242,15 @@ def main(session_dir: str, target: str = "original") -> None:
                 for r in f["refs"]:
                     ref_index[(r["section"], r["page"])] += 1
 
-    total = sum(counts.values()) or 1
+    total = sum(counts.values())
     # weighted compliance: pass=1, warn=0.5, fail=0
-    score = round((counts["pass"] + counts["warn"] * 0.5) / total * 100)
+    #
+    # `or 1` 会把「一条都没查」算成 0 分 —— 与「查了全不合格」输出完全一样。
+    # 这正是本轮改送审格式时撞上的：新格式的表按科目给金额、没有人天列，
+    # 逐行单价检查无一适用，报告却印「综合得分 0/100」。
+    # **「无适用行」必须与「全不合格」长得不一样。**
+    score = (round((counts["pass"] + counts["warn"] * 0.5) / total * 100)
+             if total else None)
 
     # ---- compose markdown ----
     lines = []
@@ -260,7 +268,15 @@ def main(session_dir: str, target: str = "original") -> None:
     lines.append("")
     lines.append("## 总评")
     lines.append("")
-    lines.append(f"- **综合得分**：{score}/100")
+    if score is None:
+        lines.append("- **综合得分**：不适用 —— **本次没有可逐行核价的行**，"
+                     "不是「全部不合格」")
+        lines.append(f"  - 已扫描 {rows_scanned} 行；其中含「人天 + 单价/总额」"
+                     f"可反推单价的 0 行")
+        lines.append("  - 本工具的逐行检查针对**人力计价明细**。按科目给金额的"
+                     "汇总类报价（如送审包 Z00/Z01）不适用，须改核科目落位与计费基数")
+    else:
+        lines.append(f"- **综合得分**：{score}/100")
     lines.append(f"- **通过**：{counts['pass']} 项 / **警告**：{counts['warn']} 项 / **否决**：{counts['fail']} 项")
     bb = sugg["summary"].get("budget_band", {})
     if bb:
@@ -343,7 +359,8 @@ def main(session_dir: str, target: str = "original") -> None:
     for f in findings_flat:
         if not f.get("refs") or any(not (1 <= r["page"] <= max_page) for r in f["refs"]):
             bad += 1
-    print(f"{out_md} written — target={target}, score {score}/100, "
+    print(f"{out_md} written — target={target}, "
+          f"score {'不适用（无可逐行核价的行）' if score is None else str(score) + '/100'}, "
           f"{counts['fail']} fail / {counts['warn']} warn / {counts['pass']} pass; "
           f"{len(findings_flat)} findings, {bad} with bad page anchors")
 

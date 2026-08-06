@@ -427,11 +427,20 @@ class CostingEngine:
             if not amount:
                 continue
             total += amount
+            # 科目落位：从形态的 region_key 经标准包解析。没有落点的**要说出来**
+            # —— 一笔进了 construction_total 却没有科目的钱，评审加不平账。
+            key = spec.get("region_key")
+            sup = self.pack.delivery_support(key) if key else {}
             rows.append({"mode": mode, "mode_name": spec.get("name", mode),
                          "amount": amount,
+                         "subject": sup.get("subject") or "",
+                         "subject_status": sup.get("status") or "unmapped",
+                         # basis 走的是 internal-cost-model 的人天单价 ——
+                         # **对外产物不得写这个数**，只对内做毛利核算用。
                          "basis": (f"{cfg.get('man_days')} 人天 × "
                                    f"¥{cfg.get('rate_per_day')}/人天"
                                    if cfg.get("man_days") else cfg.get("basis", "")),
+                         "man_days": cfg.get("man_days"),
                          "note": cfg.get("note", "")})
         return {"rows": rows, "total": xlround(total, 2)}
 

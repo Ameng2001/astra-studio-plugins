@@ -43,7 +43,7 @@ quote_generate --bom bom --pack standard-packs/<region> --out deals/<id> \
 早先做过一版「计算书 Base」，把 1763 行明细复制到飞书维护 —— 那是错的。
 飞书的关联字段只能在**同一个 Base 内**用（`link_table` 吃的是 Base 内作用域的
 table_id），跨 Base 引用 BOM 做不到，于是只能复制。一份数据两处维护，
-改了名字两边就静默分叉。而 `02-功能点测算表.xlsx` 本来就比那个 Base 更全：
+改了名字两边就静默分叉。而 `…_Z02_功能点测算表_….xlsx` 本来就比那个 Base 更全：
 它有逐项因子分列和「复算公式」列，Base 只有一个合成后的 US。
 
 ### BOM Base：地域无关，只放产品事实
