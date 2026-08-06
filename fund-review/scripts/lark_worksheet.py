@@ -6,18 +6,18 @@
 
 表结构（对齐《样例表.xlsx》）：
     子系统 → 一~四级模块 → 功能点计数项名称 → 功能描述
-    → 类别 → UFP(自动) → 应用类型 → 重用程度 → 修改类型 → US(自动)
-    → 备注 → 条目ID
+    → 类别 → UFP(自动) → 应用类型 → 备注 → 条目ID
 
-    US = ROUND(UFP × 规模变更因子 × 重用系数 × 修改类型系数 × 应用类型系数, 2)，
-    与引擎 `adjusted_fp` 口径对齐。**应用类型不能漏** —— AI 类子系统
-    因子 1.5、业务处理 1.0，漏了会把 5 个 AI 子系统整体少算三分之一。
+**这个 Base 地域无关，到 UFP 为止。** `0 参数表` 只放 NESMA 估算功能点法
+权重（GB/T 42588，山东/广东/柳州三地一致引用），没有任何地域系数。
+「应用类型」列存的是**分类名**（智能信息），不是取值 1.5 —— 取值是各省标准
+规定的，属 L1。
 
-**一个 Base 对应一个标准包。** BOM 本体是区域中立的（存 `app_type: 智能信息`
-这样的分类名，不存 1.5），但计算书要算出 US 就必须落到某个省。而换省不是
-改参数表数字的事：广东 2018 分册没有规模变更因子这一环、应用类型是 4 类
-（智能信息在广东叫「人工智能」）、没有开发类别系数 —— **US 是公式结构不同**。
-所以配置带 `pack_id`，push 前与参数表的「元信息/标准包」行比对，不一致就拒写。
+调整后功能点 US、复用度、修改类型全部不在这里：US 要乘的规模变更因子、
+应用类型系数是区域标准，复用度与修改类型是交付决策。它们在
+《功能点计算书（<省>）》Base，由 `lark_costsheet.py` 按标准包渲染。
+
+把 1.5 写进 BOM，换省就得改 BOM —— 而 BOM 恰恰是最不该随省份变的东西。
 
 **一个 Base、每个子系统一张表**，外加一张「0 参数表」存权重与系数。
 UFP/US 是跨表引用参数表的公式字段 —— 改系数只改参数表一处，15 张表联动。
@@ -32,7 +32,7 @@ UFP/US 是跨表引用参数表的公式字段 —— 改系数只改参数表�
 三件 `lark_bom_sync` 没有处理的事：
   1. 字段回映射（类别/名称/描述/层级 → BOM 字段）
   2. **方案人员新增的行** —— 无条目ID，需分配新 id
-  3. 重用程度/修改类型属 **L2 交付决策**，不写进 BOM，单独导出给 deal 层
+  3. 复用度/修改类型属**区域标准与交付决策**，不在这个 Base —— 见 lark_costsheet
 
 用法：
     python3 lark_worksheet.py push --bom <dir> --config <lark-worksheet.json>
@@ -55,13 +55,8 @@ BATCH = 200
 TYPE_TO_SHEET = {"ELF": "EIF"}
 TYPE_FROM_SHEET = {"EIF": "ELF"}
 
-#: 重用程度/修改类型属 L2 交付决策，不进 BOM
-REUSE_COEF = {"低": 1.0, "中": 2 / 3, "高": 1 / 3}
-CHANGE_COEF = {"新增": 1.0, "修改": 0.8, "删除": 0.2}
-
 FIELDS = ["子系统", "一级模块", "二级模块", "三级模块", "四级模块",
-          "功能点计数项名称", "功能描述", "类别", "应用类型", "重用程度",
-          "修改类型", "备注", "条目ID"]
+          "功能点计数项名称", "功能描述", "类别", "应用类型", "备注", "条目ID"]
 
 
 def lark(*args: str) -> dict[str, Any]:
@@ -89,7 +84,6 @@ def _row(it: BomItem) -> dict[str, Any]:
         # 应用类型是**产品事实**（BOM 的 app_type），系数取值在「0 参数表」里
         # 按标准规定给。两者分开，换省只改参数表、重新归类只改这一列。
         "应用类型": it.app_type or "业务处理",
-        "重用程度": "低", "修改类型": "新增",
         "备注": "【占位待确认】" if "placeholder" in it.tags else "",
         "条目ID": it.id,
     }
@@ -98,37 +92,8 @@ def _row(it: BomItem) -> dict[str, Any]:
 # ---- push --------------------------------------------------------------
 
 
-def check_pack(cfg: dict[str, Any]) -> str | None:
-    """校验配置声明的标准包与飞书参数表里记的是不是同一个。
-
-    这张表的 US 公式带规模变更因子 —— 那是**山东的公式结构**，广东 2018
-    分册根本没有这一环，应用类型词表也不同（智能信息 vs 人工智能）。
-    拿山东的 Base 推广东的活不会报任何错，只会静默算错一个数量级都不到、
-    却足以让整份报价站不住的差额。所以宁可在 push 前挡住。
-
-    参数表用一行 `参数类别=元信息 / 参数名=标准包` 记口径，
-    pack id 写在「依据」列的 `|` 之前。
-    """
-    want = cfg.get("pack_id")
-    if not want:
-        return None                     # 未声明就不管 —— 老配置向后兼容
-    for r in fetch(cfg["base_token"], cfg["param_table"]):
-        if r.get("参数类别") == "元信息" and r.get("参数名") == "标准包":
-            got = r.get("依据", "").split("|")[0].strip()
-            if got != want:
-                return (f"标准包不一致：配置声明 {want}，飞书参数表记的是 {got}。"
-                        f"换省不是改参数表的数字 —— US 的公式结构本身不同，"
-                        f"须另建一个 Base。")
-            return None
-    return (f"配置声明 pack_id={want}，但参数表里没有「元信息/标准包」行 —— "
-            f"无法确认这个 Base 是哪个标准口径，拒绝写入。")
-
-
 def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
     """按子系统分表覆盖写入。参数表不动 —— 它是人维护的。"""
-    err = check_pack(cfg)
-    if err:
-        return {"ok": False, "written": 0, "error": err}
     bt = cfg["base_token"]
     by_system: dict[str, list[BomItem]] = defaultdict(list)
     for i in bom.active():
@@ -243,21 +208,12 @@ def pull(bom: Bom, cfg: dict[str, Any], out: Path) -> dict[str, Any]:
     changes: list[dict[str, Any]] = []
     added: list[dict[str, Any]] = []
     seen: set[str] = set()
-    delivery: list[dict[str, Any]] = []
     stats: Counter = Counter()
 
     for r in rows:
         iid = r.get("条目ID", "").strip()
         sheet_type = r.get("类别", "").strip()
         btype = TYPE_FROM_SHEET.get(sheet_type, sheet_type)
-
-        # L2 决策：重用程度/修改类型不进 BOM，导给 deal 层
-        reuse, change = r.get("重用程度", "低"), r.get("修改类型", "新增")
-        if reuse != "低" or change != "新增":
-            delivery.append({"id": iid or "(新增)", "系统": r.get("子系统", ""),
-                             "重用程度": reuse, "reuse_coef": REUSE_COEF.get(reuse, 1.0),
-                             "修改类型": change, "change_coef": CHANGE_COEF.get(change, 1.0)})
-            stats["L2 决策偏离默认"] += 1
 
         if not iid:
             if not r.get("功能点计数项名称", "").strip():
@@ -301,7 +257,7 @@ def pull(bom: Bom, cfg: dict[str, Any], out: Path) -> dict[str, Any]:
 
     out.mkdir(parents=True, exist_ok=True)
     spec = {"bom_version": bom.version, "changes": changes, "added": added,
-            "removed": removed, "delivery_overrides": delivery}
+            "removed": removed}
     (out / "worksheet-changes.json").write_text(
         json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -342,12 +298,6 @@ def pull(bom: Bom, cfg: dict[str, Any], out: Path) -> dict[str, Any]:
         if len(removed) > 30:
             L.append(f"- …其余 {len(removed) - 30} 条")
         L.append("")
-    if delivery:
-        L += ["## L2 交付决策（不进 BOM）", "",
-              f"{len(delivery)} 行的「重用程度/修改类型」偏离默认（低/新增）。",
-              "这两项属**交付方案层**，不是 BOM 的产品事实 —— 已单独导出，",
-              "落实时写进 `deals/<id>/delivery-plan.yaml` 的复用度覆盖，而非 BOM。", ""]
-
     (out / "worksheet-pull-report.md").write_text("\n".join(L), encoding="utf-8")
     return {"rows": len(rows), "stats": dict(stats), "out": str(out)}
 
