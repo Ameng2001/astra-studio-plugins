@@ -225,8 +225,8 @@ def one_pack(pack_dir: Path, work: Path, quick: bool) -> None:
         z02 = next((p for n, p in rc.items() if "Z02" in n), None)
         if z02:
             wb = openpyxl.load_workbook(z02, data_only=True)
-            check(f"{pid} Z02 有 03_试算", "03_试算" in wb.sheetnames, True)
-            t = total_row(wb["03_试算"], "试算合计")
+            check(f"{pid} Z02 有 03_二层试算", "03_二层试算" in wb.sheetnames, True)
+            t = total_row(wb["03_二层试算"], "试算合计")
             v = t.get("软件开发费（元）")
             if isinstance(v, (int, float)):
                 # 逐条目 xlround 累加 vs 子系统整体相乘，差应 < 0.01%

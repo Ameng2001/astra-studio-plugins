@@ -492,7 +492,7 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
 
     gov_sheet.save(wb, path,
                    sheets_expected=["00_测算汇总", "01_功能点明细",
-                                    "02_计价参数", "03_试算", "04_交付试算"])
+                                    "02_计价参数", "03_二层试算", "04_三层试算"])
 
 
 
@@ -545,10 +545,11 @@ def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
         + t["software_purchase"] + t["data_purchase"]
 
     s = gov_sheet.GovSheet(
-        wb, "04_交付试算", title=f"{result['deal']}　范围试算",
-        subtitle="改「本次在范围内」列（白格）→ 建设期合计与其他费用即时重算。"
+        wb, "04_三层试算", title=f"{result['deal']}　第三层试算 · 商机范围",
+        subtitle="试的是**商机决策**（第三层）：本次做多大范围。"
+                 "改「本次在范围内」白格 → 建设期合计与其他费用即时重算。"
                  "**只试范围，不试交付形态** —— 形态一改走的不是同一套公式，"
-                 "要比形态看 Z04 的三个场景。",
+                 "要比形态看 Z04 的 02_逐子系统场景对比。",
         columns=[
             gov_sheet.Col("子系统", width=40),
             gov_sheet.Col("条目数", "int", width=9),
@@ -571,7 +572,7 @@ def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
                "计入建设期（元）": gov_sheet.formula(
                    f'=IF({C["本次在范围内"]}{r}="是",{C["软件开发费（元）"]}{r},0)',
                    x["cost"], x["cost"],
-                   where=f"[04_交付试算] {x['system'][:18]}")})
+                   where=f"[04_三层试算] {x['system'][:18]}")})
     last = s._next - 1
     s.total("软件开发费合计", expect={"计入建设期（元）": sw["total"]})
     sum_row = s._next - 1
@@ -602,7 +603,7 @@ def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
         s.row({"子系统": f"　{label}", "本次在范围内": "自动",
                "计入建设期（元）": gov_sheet.formula(
                    expr, f["amount_yuan"], f["amount_yuan"],
-                   where=f"[04_交付试算] {label}")})
+                   where=f"[04_三层试算] {label}")})
     d_last = s._next - 1
 
     s.blank()
@@ -615,7 +616,7 @@ def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
            "计入建设期（元）": gov_sheet.formula(
                f"={col}{sum_row}+SUM({col}{d_first}:{col}{d_last})+{col}{fix_row}",
                t["construction_total"], t["construction_total"],
-               where="[04_交付试算] 建设期合计", rel_tol=0.0001)})
+               where="[04_三层试算] 建设期合计", rel_tol=0.0001)})
     s.note(f"　送审值（00_测算汇总 / Z00）建设期合计：¥{t['construction_total']:,.2f}。"
            f"未改任何白格时本表应与之相等。")
     s.note("　试算用法：把某个子系统的「本次在范围内」改成「否」→ 该行不计、"
@@ -641,7 +642,7 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
         wb, "02_计价参数", title=f"{result['deal']}　计价参数与依据",
         subtitle="每个取值均标注标准原文页码与条款。"
                  "**深灰格为标准取值，改动即偏离编制依据**；"
-                 "03_试算 直接引用本表 C 列，改这里全表重算。",
+                 "03_二层试算 直接引用本表 C 列，改这里全表重算。",
         columns=[
             gov_sheet.Col("参数", width=26),
             gov_sheet.Col("取值", width=18, cell_role="locked"),
@@ -712,7 +713,7 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
         s.blank()
         s.note(f"　【开发类别调整系数】**本标准无此维度** —— "
                f"{dev_node.get('note') or '人月费率不按开发类别调整'}。"
-               f"03_试算 的人月费率直接取基准人月费率。")
+               f"03_二层试算 的人月费率直接取基准人月费率。")
 
     weights, w_cite = pack.value(f"fp_counting.{method}.weights")
     s.blank()
@@ -766,10 +767,11 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
     # 广东人月费率固定 24000，没有开发类别这个维度，硬留一列就是假的。
     has_dev = "dev_first" in prows
     s = gov_sheet.GovSheet(
-        wb, "03_试算", title=f"{result['deal']}　造价试算",
-        subtitle="**绿色格全部为活公式**，参数取自 02_计价参数 的 C 列 —— "
-                 "改那里的深灰格，本表即时重算。"
-                 "本表为试算工具，**送审值以 00_测算汇总 为准**。",
+        wb, "03_二层试算", title=f"{result['deal']}　第二层试算 · 算法参数",
+        subtitle="试的是**算法参数**。深灰格取自区域标准包（第二层），"
+                 "白格「应用类型/开发类别」其实是 BOM 里的条目属性（第一层）—— "
+                 "两者改了要去不同地方落实，见页末说明。"
+                 "绿色格全部为活公式；**送审值以 00_测算汇总 为准**。",
         columns=[
             gov_sheet.Col("子系统", width=38),
             gov_sheet.Col("应用类型", width=14, cell_role="input"),
@@ -826,32 +828,32 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
             "应用类型": app_local, "未调整功能点": ufp,
             "应用类型因子": gov_sheet.formula(
                 f_app, app_f, app_f,
-                where=f"[03_试算] {sysrow['system'][:20]} 应用类型因子"),
+                where=f"[03_二层试算] {sysrow['system'][:20]} 应用类型因子"),
             "调整后功能点": gov_sheet.formula(
                 f"=ROUND({C['未调整功能点']}{row_no}*{a_size}*{a_reuse}"
                 f"*{C['应用类型因子']}{row_no},2)",
                 afp, sysrow["afp"], rel_tol=0.001,
-                where=f"[03_试算] {sysrow['system'][:20]} 调整后功能点"),
+                where=f"[03_二层试算] {sysrow['system'][:20]} 调整后功能点"),
             "工作量（人月）": gov_sheet.formula(
                 f"=ROUND({C['调整后功能点']}{row_no}*{a_prod}/{a_hpm},2)",
                 effort, sysrow["effort_man_months"], rel_tol=0.001,
-                where=f"[03_试算] {sysrow['system'][:20]} 工作量"),
+                where=f"[03_二层试算] {sysrow['system'][:20]} 工作量"),
             "人月费率（元）": gov_sheet.formula(
                 (f"=ROUND({a_rate}*{C['开发类别系数']}{row_no},2)" if has_dev
                  else f"={a_rate}"),
                 rate, sysrow["man_month_rate"],
-                where=f"[03_试算] {sysrow['system'][:20]} 人月费率"),
+                where=f"[03_二层试算] {sysrow['system'][:20]} 人月费率"),
             "软件开发费（元）": gov_sheet.formula(
                 f"=ROUND({C['工作量（人月）']}{row_no}*{C['人月费率（元）']}{row_no},2)",
                 cost, sysrow["cost"], rel_tol=0.001,
-                where=f"[03_试算] {sysrow['system'][:20]} 软件开发费"),
+                where=f"[03_二层试算] {sysrow['system'][:20]} 软件开发费"),
             "与 00 汇总差（元）": round(cost - sysrow["cost"], 2),
         }
         if has_dev:
             vals["开发类别"] = sysrow["dev_category"]
             vals["开发类别系数"] = gov_sheet.formula(
                 f_dev, dev_f, dev_f,
-                where=f"[03_试算] {sysrow['system'][:20]} 开发类别系数")
+                where=f"[03_二层试算] {sysrow['system'][:20]} 开发类别系数")
         s.row(vals)
 
     s.total("试算合计")
@@ -863,8 +865,14 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
            "相乘。应用类型因子 = 1 的子系统两者完全一致；≠ 1 的差零点几个功能点。"
            "**送审以 00_测算汇总 为准**，本表用于看参数变动的影响量级。")
     s.note("　试算用法：改 02_计价参数 的取值 → 本表绿色格自动重算 → "
-           "看「软件开发费」合计的变化。注意那些格子是**标准取值**，"
-           "试算完请勿把改动当成送审依据。")
+           "看「软件开发费」合计的变化。")
+    s.note("　【改了怎么落实】两类格子归属不同的层，落实路径也不同：")
+    s.note("　　深灰格（生产率、规模变更、复用度、系数表）= **第二层**，"
+           "区域标准包的取值。它们是标准原文，**不该改** —— 试算只为看敏感度。"
+           "若确认标准抄错了，改 standard-packs/<省>/pack.yaml 并同步 citation。")
+    s.note("　　白格（应用类型、开发类别）= **第一层**，BOM 里条目的属性。"
+           "若你认为某个子系统的分类不对，那是**要反馈的问题** —— "
+           "落实要改 bom/items/*.yaml 的 app_type / dev_category，不是改这张表。")
     s.finish()
 
 
@@ -1133,7 +1141,7 @@ def _emit_scenario_matrix(wb, comparisons: list[dict],
     回答不了「便宜在哪」—— 而后者才是选方案时要争论的。
 
     **这不是自由试算，是预置场景的展开。** 每个数都由引擎按该场景重算，
-    与 `04_交付试算` 的活公式不同：形态切换是分派逻辑，Excel 表达不了
+    与 `04_三层试算` 的活公式不同：形态切换是分派逻辑，Excel 表达不了
     （见 04 的说明）。所以这里全部是静态值 —— 但每个都算过。
     """
     systems = sorted({s for c in comparisons for s in (c.get("by_system") or {})})
