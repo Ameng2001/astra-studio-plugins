@@ -249,9 +249,24 @@ def emit_procurement_list(result: dict[str, Any], pack: StandardPack,
             f"以{bases} {f['base_wan']:,.2f} 万元为基数，"
             f"{'超额累进' if f['method'] == 'progressive' else '费率'}")
         cite = f.get("citation") or {}
+        clause = (f"p.{cite.get('page', '')} {cite.get('section', '')}".strip()
+                  or "三.(四) p.11-13")
+        # 费率上限写进依据 —— 「以 68.05 万元为基数，费率」评审验不了；
+        # 「×5%（标准：不高于 5%）」才验得了。
+        if f.get("rate") is not None and not f["blocked_reason"]:
+            note += f"　×{f['rate']:.0%}（标准：不高于 {f['rate']:.0%}）"
         s.row({"明细": f["name"], "金额（元）": f["amount_yuan"], "计算依据": note},
-              clause=f"p.{cite.get('page', '')} {cite.get('section', '')}".strip()
-                     or "三.(四) p.11-13")
+              clause=clause)
+        # 超额累进摊成逐档 —— 照标准正文自带算例的写法
+        # （p.11：300×2%+（500-300）×1.6%+（800-500）×1.28%=13.04 万元）。
+        # 只写「超额累进」四个字，评审加不出这个数。
+        for st in (f.get("breakdown") or []):
+            s.note(f"　　　{st['from_wan']:,.2f} ~ {st['to_wan']:,.2f} 万元段　"
+                   f"（{st['to_wan'] - st['from_wan']:,.2f} 万 × {st['rate']:.2%}）"
+                   f"　= {st['amount_wan']:,.4f} 万元")
+        if f.get("breakdown"):
+            s.note(f"　　　逐档合计 = {f['amount_wan']:,.2f} 万元 = "
+                   f"¥{f['amount_yuan']:,.2f}")
 
     s.total("合计", expect={"金额（元）": result["totals"]["construction_total"]})
 

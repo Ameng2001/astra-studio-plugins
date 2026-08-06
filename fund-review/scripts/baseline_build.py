@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -340,6 +340,143 @@ def emit_citations(pack: StandardPack, path: Path) -> None:
 
 
 def diff(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
+    """两份基准的差异。**按变的是哪个轴分派** —— 两个轴不能同时变。
+
+        同 BOM 版本、不同标准包 → 跨区域分析（差额全来自标准的系数与公式）
+        同标准包、不同 BOM 版本 → 版本变更分析（差额全来自 BOM 改动）
+        两者都变              → 拒绝：无法归因
+
+    最后一条是这个函数最有用的部分。两个轴同时变时，金额差里有多少来自
+    改了标准、多少来自改了 BOM，**分不开**；出一张看着很像回事的对比表
+    只会让人得出错误结论。宁可拒绝。
+    """
+    same_pack = a["pack_id"] == b["pack_id"]
+    same_bom = a["bom_version"] == b["bom_version"]
+    if not same_pack and not same_bom:
+        return [
+            "# 拒绝对比：两个轴同时变了", "",
+            f"- 标准包　{a['pack_id']} → {b['pack_id']}",
+            f"- BOM 版本 {a['bom_version']} → {b['bom_version']}", "",
+            "金额差里有多少来自改标准、多少来自改 BOM，**分不开**。",
+            "出一张对比表只会让人得出错误结论。", "",
+            "改法：先固定一个轴。",
+            f"  跨区域比 → 两侧都用 BOM {b['bom_version']} 重建基准",
+            f"  比版本变更 → 两侧都用 {b['pack_id']} 重建基准",
+        ]
+    if same_pack and not same_bom:
+        return _diff_versions(a, b)
+    return _diff_regions(a, b)
+
+
+def _item_changes(a: dict[str, Any], b: dict[str, Any]) -> dict[str, list]:
+    """逐条目比对两份基准的 detail。
+
+    基准的 `detail` 是**当时那一刻的冻结记录** —— 这是能重建历史类型的
+    唯一来源。`snapshot(bom, as_of)` 只能按 since/deprecated_in 过滤成员，
+    条目**当时判成什么类型**它答不出来（改过 type 之后，历史快照给的是新值）。
+    """
+    da = {d["id"]: d for d in a["detail"]}
+    db = {d["id"]: d for d in b["detail"]}
+    out: dict[str, list] = {"added": [], "removed": [], "retyped": [],
+                            "refactored": []}
+    for iid in sorted(set(db) - set(da)):
+        out["added"].append(db[iid])
+    for iid in sorted(set(da) - set(db)):
+        out["removed"].append(da[iid])
+    for iid in sorted(set(da) & set(db)):
+        x, y = da[iid], db[iid]
+        if x["type"] != y["type"]:
+            out["retyped"].append((x, y))
+        elif x["ufp"] != y["ufp"] or x["afp"] != y["afp"]:
+            out["refactored"].append((x, y))
+    return out
+
+
+def _diff_versions(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
+    """同一标准包下两个 BOM 版本的差异 —— 差额全部来自 BOM 改动。
+
+    存在的理由：0.17.0 → 0.18.0 那张对比表此前是**手工拼的**，
+    在一次性脚本里硬编码了旧数字，没有任何东西验证它，却写进了 CHANGELOG。
+    这与「送审表里印出来的数必须能复算」是同一条纪律 —— 自己的变更日志
+    也不该例外。
+    """
+    ch = _item_changes(a, b)
+    sa, sb = a["software_dev"], b["software_dev"]
+    L = [f"# BOM 版本变更：{a['bom_version']} → {b['bom_version']}", "",
+         f"标准包 `{a['pack_id']}` 固定，**差额全部来自 BOM 改动**。", "",
+         "## 总量", "",
+         "| 项 | 旧 | 新 | 差 |", "|---|---:|---:|---:|"]
+    for k, label, fmt in (("ufp_total", "未调整功能点", ",.0f"),
+                          ("afp_total", "调整后功能点", ",.2f"),
+                          ("effort_total", "工作量（人月）", ",.2f"),
+                          ("total", "软件开发费（元）", ",.2f")):
+        d = sb[k] - sa[k]
+        L.append(f"| {label} | {sa[k]:{fmt}} | {sb[k]:{fmt}} | {d:+{fmt}} |")
+    if sa["total"]:
+        L.append(f"\n软件开发费变动 **{(sb['total']/sa['total']-1):+.2%}**。")
+
+    L += ["", "## 条目变动", "",
+          "| 类别 | 条数 | ΔUFP |", "|---|---:|---:|"]
+    d_add = sum(i["ufp"] for i in ch["added"])
+    d_rm = -sum(i["ufp"] for i in ch["removed"])
+    d_rt = sum(y["ufp"] - x["ufp"] for x, y in ch["retyped"])
+    d_rf = sum(y["ufp"] - x["ufp"] for x, y in ch["refactored"])
+    for label, n, d in (("新增", len(ch["added"]), d_add),
+                        ("废弃", len(ch["removed"]), d_rm),
+                        ("改判类型", len(ch["retyped"]), d_rt),
+                        ("权重/因子变动", len(ch["refactored"]), d_rf)):
+        if n:
+            L.append(f"| {label} | {n} | {d:+,.0f} |")
+    L.append(f"| **合计** | | **{d_add + d_rm + d_rt + d_rf:+,.0f}** |")
+    # 对账：逐条目累加必须等于总量差，否则这张表是错的
+    want = sb["ufp_total"] - sa["ufp_total"]
+    got = d_add + d_rm + d_rt + d_rf
+    if got != want:
+        L += ["", f"> ⚠ **逐条目累加 {got:+,.0f} ≠ 总量差 {want:+,.0f}** —— "
+                  f"本表不可信，请检查 detail 是否完整。"]
+
+    if ch["retyped"]:
+        by = defaultdict(list)
+        for x, y in ch["retyped"]:
+            by[(x["type"], y["type"])].append(y)
+        L += ["", "### 改判类型", "", "| 改判 | 条数 | ΔUFP | 涉及子系统 |",
+              "|---|---:|---:|---|"]
+        for (t0, t1), rows in sorted(by.items(), key=lambda kv: -len(kv[1])):
+            du = sum(r["ufp"] for r in rows) - sum(
+                x["ufp"] for x, y in ch["retyped"] if x["type"] == t0
+                and y["type"] == t1)
+            syss = sorted({r["system"].split("：")[-1].split("（")[0][:14]
+                           for r in rows})
+            L.append(f"| {t0} → {t1} | {len(rows)} | {du:+,.0f} | "
+                     f"{'、'.join(syss[:4])}{'…' if len(syss) > 4 else ''} |")
+
+    for key, label in (("added", "新增"), ("removed", "废弃")):
+        if not ch[key]:
+            continue
+        by_sys = Counter(i["system"].split("：")[-1].split("（")[0][:20]
+                         for i in ch[key])
+        L += ["", f"### {label}（{len(ch[key])} 条）", ""]
+        for s, n in by_sys.most_common():
+            L.append(f"- {s}：{n} 条")
+
+    L += ["", "## 分子系统", "", "| 子系统 | 旧 UFP | 新 UFP | Δ | 旧金额 | 新金额 | Δ |",
+          "|---|---:|---:|---:|---:|---:|---:|"]
+    ma = {s["system"]: s for s in sa["systems"]}
+    mb = {s["system"]: s for s in sb["systems"]}
+    for sysn in sorted(set(ma) | set(mb)):
+        x, y = ma.get(sysn), mb.get(sysn)
+        u0, u1 = (x["ufp"] if x else 0), (y["ufp"] if y else 0)
+        c0, c1 = (x["cost"] if x else 0), (y["cost"] if y else 0)
+        if u0 == u1 and c0 == c1:
+            continue
+        L.append(f"| {sysn[:36]} | {u0:,.0f} | {u1:,.0f} | {u1-u0:+,.0f} | "
+                 f"{c0:,.2f} | {c1:,.2f} | {c1-c0:+,.2f} |")
+    L += ["", "> 本表由 `baseline_build --diff` 生成，可直接粘进 CHANGELOG。",
+          "> 数字取自两份 baseline.json 的冻结记录，不是手工抄的。"]
+    return L
+
+
+def _diff_regions(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
     """两份基准的差异 —— 这就是跨区域分析。
 
     第二层不含任何商机决策，所以两份基准**天生可比**：UFP 必须一致

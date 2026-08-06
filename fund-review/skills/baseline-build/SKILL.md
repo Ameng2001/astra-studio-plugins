@@ -86,7 +86,30 @@ xlsx 用与第三层送审包**同一套结构规范**（`gov_sheet`）：`00_�
 `pack.productivity_band()` 有 `rates.productivity_hours_per_fp.adjustable_range`
 才返回三档，否则 `None`。
 
-## --diff 的输出
+## --diff 按变的是哪个轴分派
+
+```
+同 BOM 版本、不同标准包 → 跨区域分析（差额全来自标准的系数与公式）
+同标准包、不同 BOM 版本 → 版本变更分析（差额全来自 BOM 改动）
+两者都变              → 拒绝：无法归因
+```
+
+最后一条是最有用的部分。两轴同时变时，金额差里有多少来自改标准、多少来自
+改 BOM **分不开**；出一张看着很像回事的对比表只会让人得出错误结论。
+
+版本轴的输出逐条目摊开（新增/废弃/改判类型/权重变动），并**对账**：
+逐条目累加必须等于总量差，对不上就在表里标「本表不可信」。
+
+它存在的理由：0.17.0 → 0.18.0 那张对比表此前是手工拼的 —— 在一次性脚本里
+硬编码旧数字，没有任何东西验证它，却写进了 CHANGELOG。
+「印出来的数必须能复算」这条纪律，自己的变更日志也不该例外。
+
+```bash
+PYTHONPATH=$PLUG python3 $PLUG/baseline_build.py --diff \
+    baselines/shandong-2024@bom-0.17.0 baselines/shandong-2024@bom-0.18.0
+```
+
+## --diff 的跨区域输出
 
 比原 `standard_ingest compare` 多一栏 **科目支持差异** —— 换省时最容易出事的正是它：
 

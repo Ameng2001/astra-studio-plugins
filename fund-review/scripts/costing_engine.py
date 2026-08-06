@@ -500,12 +500,44 @@ class CostingEngine:
                 "id": spec["id"], "name": spec["name"],
                 "base": spec["base"], "base_wan": xlround(base_wan, 4),
                 "method": spec["method"],
+                "rate": spec.get("max_rate"),
+                # 分档明细：让清单能把「超额累进」摊开成 300×2%+200×1.6%+…
+                # 而不是只写四个字。评审要能自己加出这个数。
+                "breakdown": (self._progressive_steps(base_wan, spec["table"],
+                                                      amount_wan, spec["name"])
+                              if spec["method"] == "progressive" else None),
                 "amount_wan": amount_wan,
                 "amount_yuan": xlround(amount_wan * 10000, 2),
                 "blocked_reason": blocked,
                 "citation": spec.get("citation"),
             })
         return out
+
+    @staticmethod
+    def _progressive_steps(base_wan: float, table: list, total_wan: float,
+                           name: str) -> list[dict[str, Any]]:
+        """把超额累进摊成逐档。
+
+        这里**重走了一遍 `profile.progressive` 的分档逻辑** —— 两处实现分叉的话，
+        印出来的分解就会和总额对不上，而分解正是给评审自己加的。
+        所以算完立刻与 profile 的结果比对，对不上直接报错。
+        """
+        steps, low = [], 0.0
+        for cap, rate in table:
+            hi = base_wan if cap is None else min(base_wan, cap)
+            if hi > low:
+                steps.append({"from_wan": low, "to_wan": hi, "rate": rate,
+                              "amount_wan": xlround((hi - low) * rate, 4)})
+                low = hi
+            if cap is not None and base_wan <= cap:
+                break
+        got = xlround(sum(s["amount_wan"] for s in steps), 2)
+        if abs(got - total_wan) > 0.01:
+            raise ValueError(
+                f"{name}：分档累加 {got} 万 ≠ 引擎算出的 {total_wan} 万。\n"
+                f"  分档明细是印给评审自己加的，加不出总额就是在给错误的依据。"
+                f"  检查 _progressive_steps 是否与 formula_profile.progressive 分叉。")
+        return steps
 
     # ---- 合成 ----
 

@@ -586,6 +586,38 @@ check("locked 列上深灰", sc.ws.cell(3, 3).fill.fgColor.rgb[-6:], "D9D9D9")
 
 
 
+# --- G-16 判定理由自述的类型必须等于实际类型 ---
+# 「有理由」和「理由对」是两件事。G-02b 只查前者；一条 type=EQ 而理由在
+# 论证 ILF 的条目，比没写理由更糟 —— 评审读的正是理由。
+b_ok = _bom_of(("FP.A.0001", "系统甲", "某项", "EQ", ""))
+b_ok.items[0].nesma.rationale = "判为 EQ：向边界外送出数据且不含派生计算。"
+check("理由与类型一致不报", nr.g16_rationale_matches_type(b_ok), [])
+b_bad = _bom_of(("FP.A.0001", "系统甲", "某项", "EQ", ""))
+b_bad.items[0].nesma.rationale = "判为 ILF：系统边界内维护的逻辑数据组。"
+f16 = nr.g16_rationale_matches_type(b_bad)
+check("理由与类型分叉要报 G-16", [x.gate for x in f16], ["G-16"])
+check("G-16 阻断 reviewed", f16[0].blocks, "reviewed")
+# ELF 与 EIF 是同一概念的两地称谓，不算分叉
+b_eif = _bom_of(("FP.A.0001", "系统甲", "某项", "ELF", ""))
+b_eif.items[0].nesma.rationale = "判为 EIF：他方维护的逻辑数据组。"
+check("ELF/EIF 视为同一概念", nr.g16_rationale_matches_type(b_eif), [])
+# 没有「判为 X」句式的不报 —— 那是 G-02b 的范围
+b_no = _bom_of(("FP.A.0001", "系统甲", "某项", "EQ", ""))
+b_no.items[0].nesma.rationale = "沿用原表口径，待共创确认。"
+check("无「判为」句式不误报", nr.g16_rationale_matches_type(b_no), [])
+
+# --- 超额累进分档：分解之和必须等于引擎总额 ---
+from costing_engine import CostingEngine as _CE
+TBL = [[300, 0.02], [500, 0.016], [1000, 0.0128], [None, 0.0102]]
+st = _CE._progressive_steps(800.0, TBL, 13.04, "设计费")   # 标准 p.11 自带算例
+check("分档数（800 万落在第 3 档）", len(st), 3)
+check("逐档累加等于标准算例", round(sum(s["amount_wan"] for s in st), 2), 13.04)
+raises("分解与引擎总额不符要报错",
+       lambda: _CE._progressive_steps(800.0, TBL, 99.0, "设计费"),
+       ValueError, "分档累加")
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:

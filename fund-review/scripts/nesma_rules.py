@@ -204,6 +204,45 @@ def g04_missing_ilf(bom: Bom) -> list[Finding]:
     return out
 
 
+#: rationale 里「判为 X」的自述类型 —— 与 nesma.type 必须一致
+_RATIONALE_TYPE = re.compile(r"判为\s*(ILF|ELF|EIF|EI|EO|EQ)")
+
+
+def g16_rationale_matches_type(bom: Bom) -> list[Finding]:
+    """G-16 判定理由自述的类型必须等于实际记的类型。
+
+    G-02b 只问「有没有理由」。但**评审读的是理由本身** —— 一条 `type=EQ`
+    而理由在论证 ILF 的条目，比没写理由更糟：它是自信地错。
+
+    这个坑很好踩：改判类型时只改 `type` 忘了改 `rationale`，两处就分叉。
+    0.18.0 那轮批量改判 ILF→ELF 时，23 条全部踩了一遍；而在此之前
+    BOM 里已经躺着 4 条同样的矛盾，1205 条有理由的条目中没有任何机制拦它。
+
+    只查「判为 X」这个句式 —— 机械、零误报。理由里没有这个句式的不报
+    （那是 G-02b 的范围）。
+    """
+    out = []
+    for it in bom.active():
+        if not is_fp_counted(it):
+            continue
+        m = _RATIONALE_TYPE.search(it.nesma.rationale or "")
+        if not m:
+            continue
+        said = m.group(1)
+        # ELF 与 EIF 是同一概念的两地称谓（山东叫 ELF，IFPUG 叫 EIF）
+        norm = {"EIF": "ELF"}
+        if norm.get(said, said) != norm.get(it.nesma.type, it.nesma.type):
+            out.append(Finding(
+                "G-16", "fail", "reviewed", "item", it.id,
+                f"判定理由自述「判为 {said}」，但实际记的是 {it.nesma.type} —— "
+                f"评审读的是理由，两处分叉比不写理由更糟",
+                {"rationale_says": said, "nesma_type": it.nesma.type,
+                 "excerpt": (it.nesma.rationale or "")[:90],
+                 "fix": "改判类型时 rationale 要一起改；"
+                        "若理由确实在论证另一个类型，说明改判本身有问题"}))
+    return out
+
+
 def g15_shared_logical_file(bom: Bom) -> list[Finding]:
     """G-15 同一逻辑数据组跨子系统重复记 ILF。
 
@@ -451,7 +490,7 @@ GATES: list[Callable[[Bom], list[Finding]]] = [
     g05_description, g06_cross_system_duplicates, g07_class_consistency,
     g08_maturity_evidence, g09_gpu_dependency, g11_name_uniqueness,
     g12_placeholders, g13_purchase_subject, g14_vocabulary,
-    g15_shared_logical_file,
+    g15_shared_logical_file, g16_rationale_matches_type,
 ]
 
 
