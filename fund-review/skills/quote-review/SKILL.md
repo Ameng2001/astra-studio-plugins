@@ -15,21 +15,26 @@ Produce a `review-report.md` styled like a pre-audit memo. Every row of conclusi
 
 ## Steps
 
-### 1. Deterministic compliance pass
-For each row of the target quote:
-- Look up applicable clauses via `mapping.json`
-- Run rule checks via `formula-engine`:
-  - Unit price within range?
-  - Function-point formula satisfied (where applicable)?
-  - Category factor + reuse factor consistent?
-  - OA/website/CA per-user caps respected?
-  - Direct non-labor cost zeroed unless justified?
-- Assign per-row score in `{pass, warn, fail}` with a machine-readable reason code
+### 1–2. 确定性合规检查与分节汇总 —— 跑脚本
 
-### 2. Aggregate to sections
-Group findings under the standard's section tree (信息化建设项目预算支出标准 → 软件 / 网络 / 设备 / ...).
+```bash
+PLUG=${CLAUDE_SKILL_DIR}/../../scripts
+PYTHONPATH=$PLUG python3 $PLUG/run_review.py .fund-review/{session-id} [--target original|final]
+# → review-report.md + review-findings.json
+```
 
-### 3. Expert commentary (LLM, via agent)
+`run_review` 读 `quote.json` + `optimize-suggestions.json`（或 `approved-plan.json`），
+逐行跑规则检查、按标准的科目树分节汇总、算总分，**每条结论都带 PDF 页锚**。
+逐行检查项：单价是否在区间内、功能点公式是否满足、类别与复用度因子是否一致、
+OA/网站/CA 的人均上限、直接非人力成本是否已归零。
+
+`--target final` 用 `approved-plan.json` 复评改后的版本；缺该文件时会退回
+`original` 并告警 —— **注意看那行 WARN**，否则你以为在评改后版本、其实评的是原版。
+
+**不要用 LLM 复现这些检查。** 它们要给出可向财评复算的分数与页锚，
+模型执行会得到每次不同、且解释不了「这个分是怎么来的」的结果。
+
+### 3. 专家评述（LLM，经 agent）—— 模型只解释，不改分
 Invoke `financial-reviewer` agent for any `warn`/`fail` items:
 - Question: "如何作为财评专家挑战这一项？"
 - Expected output: 2-4 sentences of professional challenge + suggested remediation

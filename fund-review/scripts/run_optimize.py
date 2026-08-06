@@ -55,19 +55,40 @@ def _band_pct() -> float:
 
 
 
+#: 金额列的候选名。**认不出就报错，不静默返回 0** ——
+#: 这是 P0 那类失败的同族：依赖具体表头，换一份报价表就全落空，
+#: 而 0 会被当成「这份报价没有金额」而不是「我没认出金额列」。
+PRICE_COLUMNS = ["成本总价", "对外总价", "成本总价（元）", "对外总价（元）",
+                 "研发报价", "报价", "总价", "总价（元）", "金额", "金额（元）"]
+
+
+class QuoteShapeError(RuntimeError):
+    """报价表结构与预期不符 —— 硬失败，不静默出 0。"""
+
+
 def compute_original_total(quote: dict) -> float:
     total = 0.0
-    candidates = ["成本总价", "对外总价", "成本总价（元）", "对外总价（元）", "研发报价"]
+    hit = 0
+    seen_cols: set[str] = set()
     for wb in quote["workbooks"]:
         for sh in wb["sheets"]:
             if sh["kind"] == "summary":
                 continue
             for row in sh["rows"]:
-                for c in candidates:
+                seen_cols |= set(row["cells"])
+                for c in PRICE_COLUMNS:
                     v = row["cells"].get(c)
                     if isinstance(v, (int, float)):
                         total += v
+                        hit += 1
                         break
+    if hit == 0:
+        raise QuoteShapeError(
+            "未在报价表里认出任何金额列 —— 预算带无从计算。\n"
+            f"  期望其一：{PRICE_COLUMNS}\n"
+            f"  实际列名：{sorted(seen_cols)[:25]}\n"
+            "  请把本表的金额列名加进 run_optimize.PRICE_COLUMNS。"
+            "静默返回 0 会让 ±5% 预算带变成对 0 取带，毫无意义。")
     return round(total, 2)
 
 
@@ -163,11 +184,18 @@ def build_fp_table(quote: dict, out_xlsx: str) -> dict:
     seq = 0
     by_cat: dict[str, int] = {}
     sum_min, sum_max = 0.0, 0.0
+    skipped_wb: dict[str, int] = {}
+    skipped_sh: dict[str, int] = {}
     for wb in quote["workbooks"]:
-        if wb["kind"] not in {"platform", "llm"}:
+        # kind 由 parse_quote 按文件名/表头猜；猜成 unknown 时**不能当成
+        # 「这份报价没有功能点」** —— 那正是本表落空的原因（kind=unknown）。
+        # 放宽到「非 summary 即处理」，并把跳过的记下来供诊断。
+        if wb["kind"] in {"standard", "guideline"}:
+            skipped_wb[wb["kind"]] = skipped_wb.get(wb["kind"], 0) + 1
             continue
         for sh in wb["sheets"]:
-            if sh["kind"] not in {"items", "deploy"}:
+            if sh["kind"] == "summary":
+                skipped_sh[sh["kind"]] = skipped_sh.get(sh["kind"], 0) + 1
                 continue
             for row in sh["rows"]:
                 person_days = row["cells"].get("人/天") or row["cells"].get("人天")
@@ -245,6 +273,12 @@ def main(session_dir: str) -> None:
     pruned, budget_band = enforce_budget_band(all_sugg, original_total)
 
     fp_table = build_fp_table(quote, str(s / "feasibility-fp-table.xlsx"))
+    if fp_table["total_fp"] == 0:
+        # 同上：0 个功能点是**可能的**（纯硬件报价），但绝大多数情况是没认出来。
+        # 不硬失败（免得挡住合法场景），但必须显式说，不能让它混进 summary 装作正常。
+        print("  ⚠ 反推功能点合计为 0 —— 若本报价确有软件开发内容，"
+              "说明「人天/人/天」列未被识别，或 sheet.kind 判定有误。"
+              "检查 parse_quote 的 kind 判定与列名。", file=sys.stderr)
     _append_split_detail(str(s / "feasibility-fp-table.xlsx"),
                          [x for x in all_sugg if x["category"] == "workdays-outlier"])
 

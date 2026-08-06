@@ -36,6 +36,15 @@ SECTION_TITLES = {
 }
 
 
+#: 单价与总额的候选列名。**认不出不是「合格」，是「没检查」** ——
+#: 这个脚本此前连续三处栽在同一个形状上：金额列认不出返回 0、
+#: wb_kind=unknown 整条链跳过、单价列认不出逐行跳过。
+#: 都不报错，都给出「一切正常」的假象。
+UNIT_PRICE_COLUMNS = ["成本单价", "单价（元）", "单价", "对外单价", "人天单价"]
+TOTAL_COLUMNS = ["成本总价", "对外总价", "成本总价（元）", "对外总价（元）",
+                 "研发报价", "报价", "总价", "总价（元）", "金额", "金额（元）"]
+
+
 def review_row(wb_kind: str, sheet_name: str, sheet_kind: str, row_cells: dict) -> list[dict]:
     """Return a list of finding dicts for this single quote row."""
     findings = []
@@ -55,11 +64,26 @@ def review_row(wb_kind: str, sheet_name: str, sheet_kind: str, row_cells: dict) 
     orig = row_cells.get("_orig_detail")
     if orig:
         detail = orig
-    unit_price = row_cells.get("成本单价") or row_cells.get("单价（元）")
     person_days = row_cells.get("人/天") or row_cells.get("人天")
+    unit_price = next(
+        (row_cells[c] for c in UNIT_PRICE_COLUMNS
+         if isinstance(row_cells.get(c), (int, float))), None)
+    if unit_price is None and isinstance(person_days, (int, float)) and person_days > 0:
+        # 很多报价表没有显式单价列，只有「人天 + 报价(总额)」——
+        # 单价是隐含的（如本例总表注明 1,000 元/人天）。
+        # 认不出单价就跳过整行，等于「认不出的行一律判合格」。
+        total = next((row_cells[c] for c in TOTAL_COLUMNS
+                      if isinstance(row_cells.get(c), (int, float))), None)
+        if total:
+            unit_price = round(total / person_days, 2)
 
     # Check 1: 软件类报价 → 单价 vs 标准带
-    if wb_kind in {"platform", "llm"} and sheet_kind in {"items", "deploy"} and isinstance(unit_price, (int, float)) and isinstance(person_days, (int, float)) and person_days > 0:
+    # `wb_kind` 由 parse_quote 按文件名/表头猜，猜不出就是 "unknown"。
+    # 把 unknown 排除在检查之外，等于「认不出的报价一律判为合格」——
+    # 实测一份 1215 行的真实报价因此得到 0 findings / 0 分而命令正常退出。
+    # 改为：只排除**明确不是报价**的 kind，其余都查。
+    softwarish = wb_kind not in {"standard", "guideline"}
+    if softwarish and sheet_kind != "summary" and isinstance(unit_price, (int, float)) and isinstance(person_days, (int, float)) and person_days > 0:
         category, reuse = classify_fp_row(str(detail), sheet_name, wb_kind)
         verdict = check_per_day_rate(unit_price, category, reuse)
         floor, ceiling = recommend_per_day_rate(category, reuse)
@@ -84,6 +108,23 @@ def review_row(wb_kind: str, sheet_name: str, sheet_kind: str, row_cells: dict) 
                 "challenge": f"如归 {category} 类需在可研报告说明取上限依据；否则降为 ¥{ceiling:.0f} 内更稳健",
                 "refs": [
                     {"section": "三.(一).2.1.表3", "page": 14, "snippet": "凡取值超过 1 的需列明具体取值依据"},
+                ],
+            })
+
+        else:
+            # verdict == "ok" 也要记一条 pass。
+            # 不记的话，「全部合规」与「一行都没查到」在计分上完全一样 ——
+            # 都是 0 findings → score 0/100。实测这份真实报价 1131 行单价
+            # 全部落在标准带内，却报「综合得分 0/100」，读的人只会以为烂透了。
+            findings.append({
+                "rule": "labor-pricing-in-band",
+                "severity": "pass",
+                "summary": f"单价 ¥{unit_price}/人天 在 {category}/{reuse} 标准带 "
+                           f"¥{floor:.0f}-¥{ceiling:.0f} 内",
+                "challenge": "",
+                "refs": [
+                    {"section": "三.(一).2.1", "page": 13,
+                     "snippet": "定制软件开发费公式：FP×6.51/174×17000×类别×复用 + 直接非人力"},
                 ],
             })
 
@@ -184,6 +225,8 @@ def main(session_dir: str, target: str = "original") -> None:
     s = Path(session_dir)
     quote = json.loads((s / "quote.json").read_text())
     sugg = json.loads((s / "optimize-suggestions.json").read_text())
+    # standard.json 原本加载在函数末尾、却在中段被用于报告抬头 —— 提到这里
+    standard = json.loads((s / "standard.json").read_text())
 
     if target == "final":
         plan_path = s / "approved-plan.json"
@@ -232,7 +275,12 @@ def main(session_dir: str, target: str = "original") -> None:
     lines.append("")
     lines.append(f"*评审目标*: **{'优化后报价 (post-rewrite)' if target == 'final' else '原始报价 (pre-optimization)'}**")
     lines.append(f"*会话*: `{s}`")
-    lines.append(f"*评审基准*: 柳财审〔2020〕16号《柳州市本级信息化建设项目预算支出标准（试行）》")
+    # 评审基准必须来自本次实际解析的 standard.json ——
+    # 此前硬编码「柳财审〔2020〕16号」，喂山东标准也照样这么写，
+    # 那是**报告在声称一个不是它所用的依据**，比数字错更严重。
+    std_title = (standard.get("title") or standard.get("doc_title")
+                 or standard.get("source_pdf") or "（standard.json 未记标题）")
+    lines.append(f"*评审基准*: {std_title}")
     lines.append(f"*生成时间*: {datetime.now().isoformat(timespec='seconds')}")
     lines.append("")
     lines.append("## 总评")
@@ -282,7 +330,7 @@ def main(session_dir: str, target: str = "original") -> None:
                 lines.append(f"- **修正建议**：{f['remediation']}")
             lines.append(f"- **标准出处**：")
             for r in f["refs"]:
-                lines.append(f"  - 《柳财审〔2020〕16号》第 {r['page']} 页 / {r['section']} — {r['snippet']}")
+                lines.append(f"  - 《{std_title}》第 {r['page']} 页 / {r['section']} — {r['snippet']}")
             lines.append("")
         if len([f for f in fs if f["severity"] == "warn"]) > 3:
             lines.append(f"> *本节另有 {len(fs) - len(sec_fails) - 3} 条警告，详见 review-findings.json*")
@@ -315,7 +363,6 @@ def main(session_dir: str, target: str = "original") -> None:
     }, ensure_ascii=False, indent=2))
 
     # ---- self-check: every persisted finding must have non-empty refs with valid pages ----
-    standard = json.loads((s / "standard.json").read_text())
     max_page = standard["page_count"]
     bad = 0
     for f in findings_flat:

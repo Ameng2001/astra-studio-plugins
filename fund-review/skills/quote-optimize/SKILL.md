@@ -14,23 +14,51 @@ Produce evidence-backed optimization suggestions; **does not modify the original
 
 ## Steps
 
-### 1. Deterministic compliance scan (no LLM)
-Three scanners write findings to a working buffer:
+### 1. 确定性扫描 —— 跑脚本，不要自己算
 
-- **subject-alignment**: for every quote row, look up matching standard clause via `mapping.json`. Unmatched rows → suggestion `subject-mapping`.
-- **semantic-overlap**: cross-sheet text similarity (TF-IDF over normalized 建设详情 columns) between 平台 sheets and 大模型 sheets; matches above threshold → suggestion `semantic-split` with proposed terminology shift (平台 → 功能特性 / 大模型 → 模型能力).
-- **labor-pricing**: for every row with `人/天` or `人天` column, recompute using `formula-engine` (see `${CLAUDE_SKILL_DIR}/../../references/formula-engine.md`):
-  - Convert standard 1.7 万/人月 × category factor × reuse factor → per-day rate floor/ceiling
-  - For software-development rows, optionally propose function-point recalculation if FP estimates are missing
-  - Deviations → suggestion `labor-pricing`
+```bash
+PLUG=${CLAUDE_SKILL_DIR}/../../scripts
+PYTHONPATH=$PLUG python3 $PLUG/run_optimize.py .fund-review/{session-id}
+# → optimize-suggestions.json + feasibility-fp-table.xlsx
+```
 
-Additional scanners (lighter):
-- **sheet-restructure**: detect cases like the 6-园所 device sheets without a summary; propose adding a summary sheet
-- **overlap-attribution**: rows that legitimately exist in both 平台 and 大模型 — propose splitting cost across the two with explicit attribution
+`run_optimize` 编排 12 个扫描器并写出 `optimize-suggestions.json`
+（它的 docstring 就写着 "orchestrator for quote-optimize skill"）：
 
-### 2. Expert review (LLM, via agent)
+| 扫描器 | 查什么 |
+|---|---|
+| `scan_subject` | 逐行对 `mapping.json` 找标准条款；对不上 → `subject-mapping` |
+| `scan_labor` | 有 `人/天`/`人天` 的行按 `formula_engine` 重算人天档位区间 |
+| `scan_semantic` | 平台 sheet 与大模型 sheet 的描述相似度 → `semantic-split` |
+| `scan_completeness` / `scan_redundancy` / `scan_workdays` | 漏项、重复计列、人天离群 |
+| `scan_summary_sheets` | 多 sheet 无汇总（P0 那类结构问题） |
+| `scan_ops` / `scan_commercial` / `scan_brand_models` | 运维、商务条款、品牌型号 |
+| `scan_evidence` / `scan_caps` | **最后跑** —— 它们要看到前面所有结论 |
+
+**不要用 LLM 复现这些扫描。** 相似度、人天区间、预算带这类计算必须是
+确定性的、可复算的；交给模型执行会得到每次都不一样、且无法向财评解释的结果。
+本步骤的价值恰恰在于它不是模型算的。
+
+#### 认不出就报错，不静默出 0
+
+`run_optimize` 在两处会硬失败或显式告警，遇到时**先修输入或代码，不要跳过**：
+
+- **金额列认不出** → `QuoteShapeError`，列出期望与实际列名。
+  静默返回 0 会让 ±5% 预算带变成「对 0 取带」，毫无意义。
+  修法：把本表的金额列名加进 `run_optimize.PRICE_COLUMNS`。
+- **反推功能点合计为 0** → stderr 告警。纯硬件报价确实可能是 0，
+  但绝大多数情况是 `人天` 列没被识别、或 `parse_quote` 的 `kind` 判定有误。
+
+这两处此前都是静默返回 0 的：实测一份 1215 行的真实报价，
+原总额与 FP 双双为 0 而命令正常退出 —— 修好后是 ¥34,756,235.24 / 41,103 FP。
+
+### 2. 专家复核（LLM，经 agent）—— 这一步才轮到模型
+
+模型的职责是**筛选与解释**，不是计算：过滤低价值发现、按影响排序、
+补 `rationale` 与 `standard_refs[]`。金额与判定来自第 1 步，模型不改数。
+
 Invoke `quote-optimizer` agent with:
-- All deterministic findings
+- All deterministic findings（来自 `optimize-suggestions.json`）
 - `guideline.md` content (if present)
 - A summarized view of `standard.json` (top-level clause index, not full text — full text retrieved on demand)
 
@@ -39,7 +67,7 @@ The agent's job is to:
 - Add `rationale` and `standard_refs[]` to each kept suggestion
 - Estimate `delta_amount` where computable
 
-### 3. Emit `optimize-suggestions.json`
+### 3. 产物：`optimize-suggestions.json`（第 1 步已写出，第 2 步就地补 rationale）
 
 Schema:
 ```jsonc
