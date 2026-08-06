@@ -547,6 +547,39 @@ check("ILF 与 ELF 皆无要报 G-04", [x.gate for x in nr.g04_missing_ilf(b_non
 
 
 
+# --- 活公式必须自验（试算表） ---
+# 试算表的公式是给人改参数用的，但初始状态必须复现引擎的数 ——
+# 否则打开文件就看到「公式算的」和「汇总页的」两个数打架。
+f = gs.formula("=ROUND(C5*1.21,2)", 830.06, 830.06)
+check("自验通过的公式可直接进单元格", str(f), "=ROUND(C5*1.21,2)")
+check("公式携带自验证据", (f.computed, f.engine), (830.06, 830.06))
+raises("公式与引擎值不符要报错",
+       lambda: gs.formula("=C5*1.21", 1500.0, 1887.84, where="试算"),
+       gs.GovSheetError, "活公式与引擎值不符")
+# 逐条取整漂移用相对容差容忍，漏因子仍要拦
+gs.formula("=x", 1887.60, 1887.84, rel_tol=0.001)
+raises("相对容差不该放过漏因子的错",
+       lambda: gs.formula("=x", 1258.56, 1887.84, rel_tol=0.001),
+       gs.GovSheetError, "活公式与引擎值不符")
+
+# 活公式要进合计 —— 它是 str 子类，漏掉会让 =SUM() 与逐行公式对不上
+_, sf = _sheet(columns=[gs.Col("名称"),
+                        gs.Col("金额（元）", "money", sum=True)])
+for v in (100.0, 200.0, 300.0):
+    sf.row({"名称": "某项",
+            "金额（元）": gs.formula(f"=ROUND({v},2)", v, v)})
+sf.total(expect={"金额（元）": 600.0})       # 不累加 Formula 就会在这里炸
+
+# cell_role 上色：标准取值/可试算/自动算
+raises("未知 cell_role 要报错",
+       lambda: gs.Col("某列", cell_role="readonly"), gs.GovSheetError, "cell_role")
+_, sc = _sheet(columns=[gs.Col("参数"),
+                        gs.Col("取值", "money", cell_role="locked")])
+sc.row({"参数": "生产率", "取值": 6.71})
+check("locked 列上深灰", sc.ws.cell(3, 3).fill.fgColor.rgb[-6:], "D9D9D9")
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:

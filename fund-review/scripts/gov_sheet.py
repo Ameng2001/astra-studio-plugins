@@ -81,6 +81,17 @@ CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
 RIGHT = Alignment(horizontal="right", vertical="center")
 
+#: 单元格职责配色。**抄自样例表**（`模板使用说明&基础参数` A4:B7）——
+#: 方案人员和评审都认这套：哪些格子能动、哪些不能，一眼看颜色即可，
+#: 不必去读说明。这正好回答了「区域参数要不要支持人编辑」：
+#: 系数字典不得改（那是标准原文），项目特征可填（那是本次选择），计算区自动。
+LOCKED_FILL = PatternFill("solid", fgColor="D9D9D9")   # 深灰：标准取值，不得修改
+INPUT_FILL = PatternFill("solid", fgColor="FFFFFF")    # 白：需填写/可试算
+CALC_FILL = PatternFill("solid", fgColor="E2EFDA")     # 绿：自动计算，不得修改
+LEGEND = [("D9D9D9", "标准取值，不得修改 —— 改了就偏离编制依据"),
+          ("FFFFFF", "可修改：改这些格子做试算，看对总价的影响"),
+          ("E2EFDA", "自动计算，不得修改")]
+
 TODO_MARKERS = ("待核价", "待核", "待补", "待查证", "待确认", "待技术",
                 "待商务", "待填", "待选型", "待询价", "（待")
 
@@ -166,6 +177,57 @@ def flatten_counts(d: dict[str, Any], sep: str = " / ") -> str:
     return sep.join(f"{k} {v}" for k, v in d.items())
 
 
+class Formula(str):
+    """一个活公式单元格。构造时就验过它算出来等于引擎的值。
+
+    `str` 的子类 —— openpyxl 见到以 `=` 开头的字符串就当公式写入，
+    所以它能直接进单元格，同时携带自验的证据。
+    """
+    computed: float
+    engine: float
+
+
+def formula(text: str, computed: float, engine: float, *,
+            where: str = "", tol: float = 0.01, rel_tol: float = 0.0) -> Formula:
+    """写一个可试算的活公式，并当场验它。
+
+    ## 为什么活公式在这里是安全的
+
+    本项目的铁律是「Excel 只是渲染产物，数值由引擎算定」——那条铁律来自 P0：
+    1200 行明细里 `SUMIF` 被合并单元格击穿，少算 ¥421.6 万且不报错。
+
+    但**试算链条不是那个形状**：它是 20 行以内的「参数 → 汇总」直引用，
+    没有跨表查找、没有合并单元格参与计算。样例表（`raw-input/样例表.xlsx#
+    应急管理系统应用系统功能规模`）就是这么做的，方案人员改一个系数即可看到
+    全盘影响 —— 这是静态值给不了的东西。
+
+    所以分界线不是「能不能用公式」，而是**哪一段**：
+
+      - 逐条明细的 FP 累加 → 静态（P0 的地盘，1738 行）
+      - 子系统级的参数 → 金额 → 活公式（试算的价值所在）
+
+    ## 代价：必须自己先验过
+
+    `text` 是给 Excel 算的，`computed` 是同一个算式用 Python 算一遍的结果。
+    两者都必须等于 `engine`（引擎算定的值）。对不上就报错 ——
+    否则用户打开文件看到的是「公式算出来的数」和「汇总页的数」不一致，
+    比不给公式更糟。这与 `GovSheet.total(expect=)` 是同一条纪律。
+    """
+    limit = max(tol, abs(engine) * rel_tol)
+    if abs(computed - engine) > limit:
+        raise GovSheetError(
+            f"{where or text}：活公式与引擎值不符\n"
+            f"  公式 {text}\n"
+            f"  按此算式 Python 得 {computed:,.4f}\n"
+            f"  引擎给的       {engine:,.4f}\n"
+            f"  差             {computed - engine:,.4f}（容差 {limit:,.4f}）\n"
+            f"  可试算的公式必须先自验 —— 否则打开文件就是两个数打架。"
+            f"**不要放宽容差**，先查算式是不是漏了 ROUND 或某个因子。")
+    f = Formula(text)
+    f.computed, f.engine = computed, engine
+    return f
+
+
 #: 本进程里所有带 `role` 的列：(sheet 名, 列名, 角色)。
 #: 由 `assert_roles_parseable()` 结算 —— 见那个函数的注释。
 _ROLE_REGISTRY: list[tuple[str, str, str]] = []
@@ -183,11 +245,17 @@ class Col:
     width: int | None = None
     sum: bool = False
     role: str | None = None
+    #: 单元格职责：locked（标准取值）/ input（可试算）/ calc（自动算）/ None（普通）
+    cell_role: str | None = None
 
     def __post_init__(self) -> None:
         if self.fmt not in FMT:
             raise GovSheetError(f"列 {self.name!r} 的 fmt={self.fmt!r} 未知；"
                                 f"可选：{sorted(FMT)}")
+        if self.cell_role not in (None, "locked", "input", "calc"):
+            raise GovSheetError(
+                f"列 {self.name!r} 的 cell_role={self.cell_role!r} 未知；"
+                f"可选：locked | input | calc")
 
 
 def assert_roles_parseable() -> None:
@@ -327,7 +395,15 @@ class GovSheet:
         cl.font = BOLD_FONT if bold else (TODO_FONT if is_todo else BODY_FONT)
         if fill is not None:
             cl.fill = fill
+        elif col.cell_role:
+            cl.fill = {"locked": LOCKED_FILL, "input": INPUT_FILL,
+                       "calc": CALC_FILL}[col.cell_role]
         cl.border = BORDER
+        # 活公式：按数值格式右对齐 —— 它算出来是数，不是文本
+        if isinstance(v, Formula):
+            cl.number_format = FMT[col.fmt] or FMT["money"]
+            cl.alignment = RIGHT
+            return
         if col.fmt in _RIGHT_FMTS and isinstance(v, (int, float)) and not isinstance(v, bool):
             cl.number_format = FMT[col.fmt]
             cl.alignment = RIGHT
@@ -359,8 +435,13 @@ class GovSheet:
             i = self._by_name[c.name]
             v = self._seq if c.name == "序号" else values.get(c.name)
             self._put(r, c, i, v)
-            if c.sum and isinstance(v, (int, float)) and not isinstance(v, bool):
-                self._sums[c.name] = self._sums.get(c.name, 0.0) + v
+            # 活公式也要进合计 —— 它是 str 子类，但携带自验过的 computed 值。
+            # 漏掉会让合计行的 =SUM() 与逐行公式算出来的数对不上。
+            if c.sum:
+                if isinstance(v, Formula):
+                    self._sums[c.name] = self._sums.get(c.name, 0.0) + v.computed
+                elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                    self._sums[c.name] = self._sums.get(c.name, 0.0) + v
         self._next += 1
         return r
 

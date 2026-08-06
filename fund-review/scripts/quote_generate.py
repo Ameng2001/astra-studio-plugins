@@ -429,31 +429,219 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
         f"列而不计 —— 列出以证明不是漏项。")
     det.finish()
 
-    par = gov_sheet.GovSheet(
-        wb, "02_计价参数", title=f"{result['deal']}　计价参数与依据",
-        subtitle="每个取值均标注标准原文页码与条款，供评审逐项核对",
-        columns=[
-            gov_sheet.Col("参数", width=28),
-            gov_sheet.Col("取值", width=34),
-            gov_sheet.Col("标准出处", width=34),
-        ],
-        clause_required=True, clause_name="标准出处")
-    for lb, dotted in [
-        ("规模变更因子", f"factors.size_change.values.{method}"),
-        ("软件开发生产率（人时/FP）", "rates.productivity_hours_per_fp"),
-        ("人月折算系数（人时/人月）", "rates.man_hours_per_month"),
-        ("基准人月费率（元/人月）", "rates.base_man_month_rate"),
-    ]:
-        v, c = pack.value(dotted)
-        par.row({"参数": lb, "取值": v}, clause=str(c))
-    weights, w_cite2 = pack.value(f"fp_counting.{method}.weights")
-    par.row({"参数": "功能点权重",
-             "取值": "、".join(f"{k}={n}" for k, n in weights.items())},
-            clause=str(w_cite2))
-    par.finish()
+    par, rows = emit_pricing_params(wb, result, pack, method, items)
+    emit_whatif(wb, result, pack, engine, items, method, par, rows)
 
     gov_sheet.save(wb, path,
-                   sheets_expected=["00_测算汇总", "01_功能点明细", "02_计价参数"])
+                   sheets_expected=["00_测算汇总", "01_功能点明细",
+                                    "02_计价参数", "03_试算"])
+
+
+
+def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
+                        method: str, items: list | None = None
+                        ) -> tuple[Any, dict[str, int]]:
+    """02 计价参数 —— 同时是 03 试算的**参数面板**。
+
+    结构与配色抄自样例表的 `项目特征` + `模板使用说明&基础参数`：
+    深灰 = 标准取值不得改，白 = 可改做试算。这套颜色方案人员和评审都认，
+    不必去读说明就知道哪些格子能动。
+
+    返回 (sheet, {参数名: 行号})，供 03 用绝对地址引用。
+    """
+    s = gov_sheet.GovSheet(
+        wb, "02_计价参数", title=f"{result['deal']}　计价参数与依据",
+        subtitle="每个取值均标注标准原文页码与条款。"
+                 "**深灰格为标准取值，改动即偏离编制依据**；"
+                 "03_试算 直接引用本表 C 列，改这里全表重算。",
+        columns=[
+            gov_sheet.Col("参数", width=26),
+            gov_sheet.Col("取值", width=18, cell_role="locked"),
+            gov_sheet.Col("单位/说明", width=26),
+            gov_sheet.Col("标准出处", width=36),
+        ],
+        clause_required=True, clause_name="标准出处")
+
+    rows: dict[str, int] = {}
+    for key, lb, dotted, unit in [
+        ("size", "规模变更因子", f"factors.size_change.values.{method}",
+         f"{method}的估算时机取值"),
+        ("prod", "软件开发生产率", "rates.productivity_hours_per_fp", "人时/功能点"),
+        ("hpm", "人月折算系数", "rates.man_hours_per_month", "人时/人月"),
+        ("rate", "基准人月费率", "rates.base_man_month_rate", "元/人月"),
+    ]:
+        v, c = pack.value(dotted)
+        rows[key] = s.row({"参数": lb, "取值": v, "单位/说明": unit}, clause=str(c))
+
+    # 复用度：本项目按项目类型定档，不是逐条目取值 —— 说清楚它为什么是 1.0
+    lvl = result["project_type"]
+    reuse_v = pack.factor("reuse", "新建")
+    rows["reuse"] = s.row(
+        {"参数": "复用度调整因子", "取值": reuse_v,
+         "单位/说明": f"{lvl}项目一律取此值；产品成熟度是内部成本口径，不参与造价"},
+        clause=str(pack.value("factors.reuse")[1]))
+
+    # 应用类型因子表 —— 明细里逐行印着 1.0/1.5，但**哪种类型对应哪个系数**
+    # 此前整个包里没有。评审看到 1.5 无从判断对不对。
+    # 本项目用到哪些 —— 从条目实际取值统计，**不从 result 里猜键名**。
+    # 先前这里读了个不存在的 key，静默得到空集：全表一个「本项目用到」都没标，
+    # 而表面上功能是「有」的。
+    used_apps = {(i.app_type or "业务处理") for i in (items or [])
+                 if is_fp_counted(i)}
+    if items is not None and not used_apps:
+        raise gov_sheet.GovSheetError(
+            "算不出本项目用到的应用类型 —— 传了 items 却一个 FP 条目都没有")
+    s.blank()
+    s.note("　【应用类型调整因子表】明细表逐行标注的「应用类型因子」取自此表")
+    app_tbl = (pack.data.get("factors", {}).get("app_type", {}).get("values") or {})
+    for k, v in sorted(app_tbl.items(), key=lambda kv: kv[1]):
+        rows[f"app:{k}"] = s.row(
+            {"参数": f"　应用类型 · {k}", "取值": v,
+             "单位/说明": "本项目用到" if k in used_apps else ""},
+            clause=str(pack.value("factors.app_type")[1]))
+
+    # 开发类别系数 —— 人月费率 = 基准人月费率 × 本系数。清单里印着
+    # ¥26,009.50 与 ¥23,645，中间这个 1.1 此前哪儿都没有，评审只能反推。
+    dev_tbl = (pack.data.get("factors", {}).get("dev_category", {}).get("values") or {})
+    if dev_tbl:
+        s.blank()
+        s.note("　【开发类别调整系数】人月费率 = 基准人月费率 × 本系数")
+        for k, v in sorted(dev_tbl.items(), key=lambda kv: -kv[1]):
+            rows[f"dev:{k}"] = s.row(
+                {"参数": f"　开发类别 · {k}", "取值": v,
+                 "单位/说明": "本项目用到" if k in _dev_cats_used(result) else ""},
+                clause=str(pack.value("factors.dev_category")[1]))
+
+    weights, w_cite = pack.value(f"fp_counting.{method}.weights")
+    s.blank()
+    s.note("　【功能点权重】")
+    for k, v in weights.items():
+        rows[f"w:{k}"] = s.row({"参数": f"　{k}", "取值": v,
+                                "单位/说明": "未调整功能点/个"}, clause=str(w_cite))
+
+    s.blank()
+    s.note("　【图例】" + "；".join(f"{d}" for _c, d in gov_sheet.LEGEND))
+    s.finish()
+    return s, rows
+
+
+def _dev_cats_used(result: dict[str, Any]) -> set[str]:
+    return {s["dev_category"] for s in result["software_dev"]["systems"]}
+
+
+def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
+                items, method: str, par, prows: dict[str, int]) -> None:
+    """03 试算 —— 改参数看全盘影响，形制照 `样例表#应急管理系统应用系统功能规模`。
+
+    ## 活公式在这里为什么安全
+
+    本项目铁律「数值由引擎算定、Excel 只渲染」来自 P0（1200 行明细里 SUMIF
+    被合并单元格击穿，少算 ¥421.6 万且不报错）。但**试算不是那个形状**：
+    15 行、直接引用参数面板的绝对地址、无跨表查找、无合并单元格参与计算。
+
+    所以分界线是**哪一段**用公式，不是能不能用：
+
+      - 1738 行明细的 FP 累加 → 静态（P0 的地盘）
+      - 子系统级 UFP → 金额 → 活公式（试算的价值所在）
+
+    ## 与 00_测算汇总 的口径差
+
+    引擎逐条目 `xlround(...,2)` 后累加；本表按子系统整体乘。两者在
+    应用类型系数 ≠ 1 的子系统差零点几个功能点（全项目 −0.32 FP，
+    0.003%）。**差多少直接印在表里**，不藏 —— 送审值以 00 为准。
+    """
+    P = "'02_计价参数'"
+    a_size, a_prod = f"{P}!$C${prows['size']}", f"{P}!$C${prows['prod']}"
+    a_hpm, a_rate = f"{P}!$C${prows['hpm']}", f"{P}!$C${prows['rate']}"
+    a_reuse = f"{P}!$C${prows['reuse']}"
+    size = pack.factor("size_change", method)
+    reuse = pack.factor("reuse", "新建")
+    hpm = pack.rate("man_hours_per_month")
+    prod = pack.rate("productivity_hours_per_fp")
+    base_rate = pack.rate("base_man_month_rate")
+
+    s = gov_sheet.GovSheet(
+        wb, "03_试算", title=f"{result['deal']}　造价试算",
+        subtitle="**绿色格全部为活公式**，参数取自 02_计价参数 的 C 列 —— "
+                 "改那里的深灰格，本表即时重算。"
+                 "本表为试算工具，**送审值以 00_测算汇总 为准**。",
+        columns=[
+            gov_sheet.Col("子系统", width=38),
+            gov_sheet.Col("应用类型", width=12),
+            gov_sheet.Col("开发类别", width=18),
+            gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
+            gov_sheet.Col("应用类型因子", "rate", width=12, cell_role="locked"),
+            gov_sheet.Col("开发类别系数", "rate", width=12, cell_role="locked"),
+            gov_sheet.Col("调整后功能点", "fp", width=13, sum=True,
+                          cell_role="calc"),
+            gov_sheet.Col("工作量（人月）", "fp", width=13, sum=True,
+                          cell_role="calc"),
+            gov_sheet.Col("人月费率（元）", "money", width=14, cell_role="calc"),
+            gov_sheet.Col("软件开发费（元）", "money", width=16, sum=True,
+                          cell_role="calc"),
+            gov_sheet.Col("与 00 汇总差（元）", "money", width=14, sum=True),
+        ])
+
+    sum_cost = 0.0
+    for sysrow in result["software_dev"]["systems"]:
+        its = [i for i in items if is_fp_counted(i)
+               and i.path.system == sysrow["system"]]
+        app_name = (its[0].app_type or "业务处理") if its else "业务处理"
+        app_f = pack.factor("app_type", app_name)
+        dev_f = round(sysrow["man_month_rate"] / base_rate, 4)
+        row_no = s._next                   # 本行将写在哪一行
+        ufp = sysrow["ufp"]
+
+        afp = xlround(ufp * size * reuse * app_f, 2)
+        effort = xlround(afp * prod / hpm, 2)
+        rate = xlround(base_rate * dev_f, 2)
+        cost = xlround(effort * rate, 2)
+        sum_cost += cost
+
+        C = {n: get_col_letter(s, n) for n in
+             ("未调整功能点", "应用类型因子", "开发类别系数",
+              "调整后功能点", "工作量（人月）", "人月费率（元）")}
+        s.row({
+            "子系统": sysrow["system"], "应用类型": app_name,
+            "开发类别": sysrow["dev_category"], "未调整功能点": ufp,
+            "应用类型因子": app_f, "开发类别系数": dev_f,
+            "调整后功能点": gov_sheet.formula(
+                f"=ROUND({C['未调整功能点']}{row_no}*{a_size}*{a_reuse}"
+                f"*{C['应用类型因子']}{row_no},2)",
+                afp, sysrow["afp"], rel_tol=0.001,
+                where=f"[03_试算] {sysrow['system'][:20]} 调整后功能点"),
+            "工作量（人月）": gov_sheet.formula(
+                f"=ROUND({C['调整后功能点']}{row_no}*{a_prod}/{a_hpm},2)",
+                effort, sysrow["effort_man_months"], rel_tol=0.001,
+                where=f"[03_试算] {sysrow['system'][:20]} 工作量"),
+            "人月费率（元）": gov_sheet.formula(
+                f"=ROUND({a_rate}*{C['开发类别系数']}{row_no},2)",
+                rate, sysrow["man_month_rate"],
+                where=f"[03_试算] {sysrow['system'][:20]} 人月费率"),
+            "软件开发费（元）": gov_sheet.formula(
+                f"=ROUND({C['工作量（人月）']}{row_no}*{C['人月费率（元）']}{row_no},2)",
+                cost, sysrow["cost"], rel_tol=0.001,
+                where=f"[03_试算] {sysrow['system'][:20]} 软件开发费"),
+            "与 00 汇总差（元）": round(cost - sysrow["cost"], 2),
+        })
+
+    s.total("试算合计")
+    eng = result["software_dev"]["total"]
+    s.note(f"　00_测算汇总（送审值）软件开发费：¥{eng:,.2f}　|　"
+           f"本表试算合计：¥{sum_cost:,.2f}　|　差 ¥{sum_cost - eng:,.2f}"
+           f"（{abs(sum_cost - eng) / eng:.4%}）")
+    s.note("　差的来源：引擎按**逐条目** xlround(...,2) 后累加，本表按**子系统整体**"
+           "相乘。应用类型因子 = 1 的子系统两者完全一致；≠ 1 的差零点几个功能点。"
+           "**送审以 00_测算汇总 为准**，本表用于看参数变动的影响量级。")
+    s.note("　试算用法：改 02_计价参数 的取值 → 本表绿色格自动重算 → "
+           "看「软件开发费」合计的变化。注意那些格子是**标准取值**，"
+           "试算完请勿把改动当成送审依据。")
+    s.finish()
+
+
+def get_col_letter(sheet, name: str) -> str:
+    from openpyxl.utils import get_column_letter
+    return get_column_letter(sheet._by_name[name])
 
 
 def _procurement_notes(pur: dict[str, Any]) -> list[str]:
