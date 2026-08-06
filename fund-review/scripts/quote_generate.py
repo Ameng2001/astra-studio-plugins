@@ -385,6 +385,32 @@ def emit_notes(bom: Bom, result: dict[str, Any], pack: StandardPack,
 
     L += _procurement_notes(pur)
 
+    pf = result.get("project_factors")
+    if pf:
+        # 启用了地方标准之外的因子，必须在编制说明里自己先说清楚 ——
+        # 等财评问出来就晚了
+        L += ["### ⚠️ 项目特征因子（不属本省标准）", "",
+              f"本次启用了 `{pf['id']}` 项目特征因子，来源：**{pf['source']}**。", "",
+              f"> {str(pf.get('warning','')).strip()}", "",
+              "| 因子 | 取值 | 依据 |", "|---|---:|---|"]
+        for r in pf["rows"]:
+            basis = r.get("选择") or (f"{r.get('公式','')}，构成 {r.get('构成')}")
+            L.append(f"| {r['因子']} | {r['取值']} | {basis} |")
+        L += ["", f"**连乘 {pf['combined']}**，作用于开发工作量（项目级，非逐条目）。",
+              "", "本省标准中已有的维度（如应用类型）**以本省标准为准，不叠加**。", ""]
+
+    band = result.get("productivity_band")
+    if band:
+        L += ["### 生产率区间", "",
+              "本标准规定了生产率浮动区间，故给出三档而非单点：", "",
+              "| 档 | 生产率（人时/FP） | 工作量（人月） | 软件开发费（元） |",
+              "|---|---:|---:|---:|"]
+        for b in band:
+            L.append(f"| {b['档']} | {b['生产率']} | {b['工作量人月']} | {b['软件开发费']:,.2f} |")
+        L += ["", "单点值等于假装精确 —— 功能点法本就是估算，区间比单点诚实。", ""]
+    elif result.get("band_note"):
+        L += ["### 生产率", "", result["band_note"], ""]
+
     blocked = [f for f in result["other_fees"] if f["blocked_reason"]]
     if blocked:
         L += ["### 未计列的费用项", ""]
@@ -512,6 +538,11 @@ def main() -> None:
     ap.add_argument("--mode", help="从模式库按名字选一个交付模式（delivery-modes/scenarios/）")
     ap.add_argument("--mode-lib", type=Path, default=Path("delivery-modes/scenarios"),
                     help="模式库目录")
+    ap.add_argument("--project-factors", type=Path,
+                    help="项目特征因子文件（如 standard-packs/_common/gbt36964-factors.yaml）"
+                         "—— **默认关闭**，不属地方标准，启用后编制说明会显式标注来源")
+    ap.add_argument("--project-factor-choices", type=Path,
+                    help="本项目在上述因子上的选择（yaml）")
     ap.add_argument("--scenarios", type=Path, nargs="*", default=[],
                     help="用于 TCO 对比的场景预设")
     ap.add_argument("--publish-lark", metavar="FOLDER_TOKEN",
@@ -539,8 +570,23 @@ def main() -> None:
                       reuse_level=args.reuse_level,
                       include_placeholders=args.include_placeholders,
                       as_of_bom_version=args.as_of)
+    if args.project_factors:
+        import yaml as _yaml
+        pf = _yaml.safe_load(args.project_factors.read_text(encoding="utf-8"))
+        sel = (_yaml.safe_load(args.project_factor_choices.read_text(encoding="utf-8"))
+               if args.project_factor_choices else {})
+        pf["selected"] = sel.get("selected", sel)
+        deal.project_factors = pf
+        print(f"  ⚠ 启用项目特征因子 {pf.get('id')} —— {pf.get('source')}"
+              f"\n    本组因子**不属任何地方标准**，编制说明将显式标注")
+
     if baseline:
-        assert_matches_baseline(baseline, bom, pack, deal)
+        # 基准断言用不带项目因子的口径 —— 基准本来就不含商机决策
+        assert_matches_baseline(baseline, bom, pack,
+                                DealConfig(deal_id="__chk__",
+                                           counting_method=deal.counting_method,
+                                           project_type=deal.project_type,
+                                           as_of_bom_version=deal.as_of_bom_version))
 
     # 模式库：按名字挑，而不是每个商机手写 delivery-plan
     plan_path = args.delivery_plan

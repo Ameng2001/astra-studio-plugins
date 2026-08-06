@@ -63,6 +63,10 @@ class DealConfig:
     #: 采购科目…），没有一个是范围标记。拿治理标记当范围用是错的；而给每个商机
     #: 往 BOM 里加一轮「一期/二期」tag，是把商机决策塞回产品事实。
     scope_filter: Any = None
+    #: 项目特征因子（GB/T 36964 口径）。**默认关闭** —— 一旦默认生效，
+    #: 报价里就有一段没有地方标准依据的调整，而清单上看不出来。
+    #: 形如 {"id": "gbt36964", "selected": {"开发语言": "JAVA…", ...}, "factors": {...}}
+    project_factors: dict[str, Any] | None = None
     as_of_bom_version: str | None = None
 
 
@@ -100,6 +104,68 @@ class CostingEngine:
         self.deal = deal
         self.delivery = delivery
         self.profile = get_profile(pack.formula_profile)
+
+    def _band(self, sys_costs: list[SystemCost]) -> list[dict[str, Any]] | None:
+        """生产率三档 —— 只在标准包给了浮动依据时出。见 pack.productivity_band()。"""
+        band = self.pack.productivity_band()
+        if not band:
+            return None
+        hours_pm = self.pack.rate("man_hours_per_month")
+        pf_val, _ = self.project_factor()
+        out = []
+        for label, prod in band:
+            cost = 0.0
+            effort_total = 0.0
+            for s in sys_costs:
+                e = xlround(xlround(s.afp * prod / hours_pm, 2) * pf_val, 2)
+                effort_total += e
+                cost += xlround(e * s.man_month_rate, 2)
+            out.append({"档": label, "生产率": round(prod, 4),
+                        "工作量人月": xlround(effort_total, 2),
+                        "软件开发费": xlround(cost, 2)})
+        return out
+
+    def project_factor(self) -> tuple[float, list[dict[str, Any]]]:
+        """项目特征因子的连乘值与逐项明细。未启用时返回 (1.0, [])。
+
+        它是**项目级**的，与条目无关 —— 所以整体乘一次，不逐条乘。
+        （层边界由「什么变了要重算」定，粒度只决定乘在哪一级。）
+        """
+        pf = self.deal.project_factors
+        if not pf:
+            return 1.0, []
+        defs = pf.get("factors") or {}
+        sel = pf.get("selected") or {}
+        total, rows = 1.0, []
+        for name, spec in defs.items():
+            if name == "质量特性":
+                subs = spec.get("sub") or {}
+                s, picks = 0, {}
+                for sub_name, table in subs.items():
+                    choice = (sel.get("质量特性") or {}).get(sub_name)
+                    if choice is None:
+                        continue
+                    if choice not in table:
+                        raise ValueError(
+                            f"质量特性.{sub_name} 的取值 {choice!r} 不在 "
+                            f"{pf.get('id')} 词表中：{sorted(table)}")
+                    s += table[choice]; picks[sub_name] = table[choice]
+                v = xlround(1 + 0.025 * s, 4)
+                rows.append({"因子": name, "取值": v, "构成": picks,
+                             "公式": "1 + 0.025 × Σ子项"})
+            else:
+                choice = sel.get(name)
+                if choice is None:
+                    continue
+                table = spec.get("values") or {}
+                if choice not in table:
+                    raise ValueError(
+                        f"{name} 的取值 {choice!r} 不在 {pf.get('id')} 词表中："
+                        f"{sorted(table)}")
+                v = table[choice]
+                rows.append({"因子": name, "取值": v, "选择": choice})
+            total *= v
+        return xlround(total, 6), rows
 
     def reuse_level(self, item: BomItem) -> str:
         """本条目适用的复用度档位。
@@ -204,6 +270,9 @@ class CostingEngine:
                     app_type=i.app_type or "业务处理")
             afp = xlround(afp, 2)
             effort = self.profile.effort_man_months(afp, pack=self.pack)
+            pf_val, _ = self.project_factor()
+            if pf_val != 1.0:
+                effort = xlround(effort * pf_val, 2)
             rate = self.profile.man_month_rate(pack=self.pack, dev_category=dev_cat)
             out.append(SystemCost(
                 system=system, dev_category=dev_cat, items=len(members),
@@ -446,6 +515,15 @@ class CostingEngine:
             "reuse_level": self.deal.reuse_level,
             "scope": {"items": len(items), "excluded": excluded,
                       "out_of_scope_systems": self._out_of_scope_systems()},
+            "productivity_band": self._band(sys_costs),
+            "band_note": (None if self.pack.productivity_band() else
+                          "本标准未规定生产率浮动区间，按 P50 单值计 —— 不替标准编造区间"),
+            "project_factors": ({"id": self.deal.project_factors.get("id"),
+                                 "source": self.deal.project_factors.get("source"),
+                                 "combined": self.project_factor()[0],
+                                 "rows": self.project_factor()[1],
+                                 "warning": self.deal.project_factors.get("warning")}
+                                if self.deal.project_factors else None),
             "software_dev": {
                 "systems": [vars(s) for s in sys_costs],
                 "ufp_total": sum(s.ufp for s in sys_costs),

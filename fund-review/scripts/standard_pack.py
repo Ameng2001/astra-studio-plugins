@@ -173,6 +173,28 @@ class StandardPack:
             raise PackError(f"{self.pack_id}: {method} 无权重 {ftype!r}")
         return weights[ftype]
 
+    def productivity_band(self) -> list[tuple[str, float]] | None:
+        """生产率的三档取值，无区间依据时返回 None。
+
+        单点值等于假装精确 —— 样例表的上限是下限的 3.1 倍，这个跨度本身就是信息。
+        但**不能给每个省都硬造区间**：
+
+          广东  `adjustable_range: [0.8, 1.2]`  标准明文 ±20%，有依据
+          山东  只给 CSBMK P50 单值 6.71        全文无「浮动/区间/P25/P75」
+
+        给山东编一个区间，等于替标准做规定。所以有 range 的出三档，
+        没有的返回 None，由调用方出单点并在编制说明写明「本标准未规定浮动区间」。
+        """
+        node = (self.data.get("rates") or {}).get("productivity_hours_per_fp") or {}
+        rng = node.get("adjustable_range")
+        if not rng:
+            return None
+        base = node["value"]
+        lo, hi = float(rng[0]), float(rng[1])
+        # 生产率是「人时/功能点」—— **越大越费工**，所以低生产率对应低报价。
+        # 顺序按金额升序排，免得读的人把「下限」当成生产率下限。
+        return [("下限", base * lo), ("中值", base), ("上限", base * hi)]
+
     def fee(self, fee_id: str) -> dict[str, Any]:
         for f in self.data.get("other_fees", []):
             if f["id"] == fee_id:

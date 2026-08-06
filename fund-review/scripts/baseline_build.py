@@ -33,6 +33,7 @@ import openpyxl
 import excel_styler
 from bom_schema import Bom, Vocabulary, is_fp_counted
 from costing_engine import CostingEngine, DealConfig, snapshot
+from nesma_weights import xlround
 from standard_pack import StandardPack
 
 
@@ -91,6 +92,24 @@ def build(bom: Bom, pack: StandardPack, counting_method: str,
         "reference_unit_price_yuan": i.spec.get("reference_unit_price_yuan"),
     } for i in items if i.spec.get("subject")]
 
+    # 三档区间 —— 只在标准包给了浮动依据时出
+    band = pack.productivity_band()
+    band_out = None
+    if band:
+        prof = eng.profile
+        afp_total = result["software_dev"]["afp_total"]
+        hours_pm = pack.rate("man_hours_per_month")
+        band_out = []
+        for label, prod in band:
+            effort = xlround(afp_total * prod / hours_pm, 2)
+            # 费率按各系统加权 —— 与单点口径同源，不另起一套
+            cost = 0.0
+            for s in result["software_dev"]["systems"]:
+                e = xlround(s["afp"] * prod / hours_pm, 2)
+                cost += xlround(e * s["man_month_rate"], 2)
+            band_out.append({"档": label, "生产率": round(prod, 4),
+                             "工作量人月": effort, "软件开发费": xlround(cost, 2)})
+
     return {
         "kind": "region_baseline",
         "generated": date.today().isoformat(),
@@ -101,6 +120,10 @@ def build(bom: Bom, pack: StandardPack, counting_method: str,
         "counting_method": method,
         "basis": "全定制开发口径、全量条目（含占位）—— 不含任何商机决策",
         "software_dev": result["software_dev"],
+        "productivity_band": band_out,
+        "band_note": (None if band_out else
+                      "本标准未规定生产率浮动区间，按 P50 单值计 —— "
+                      "不替标准编造区间"),
         "hardware": result["hardware"],
         "other_fees": result["other_fees"],
         "detail": detail,
