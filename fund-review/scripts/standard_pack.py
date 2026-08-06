@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -226,7 +227,22 @@ class StandardPack:
                     walk(v, f"{path}[{n}]")
 
         walk(self.data, "")
-        return sorted(out, key=lambda c: (c.get("page", 0), c["path"]))
+        return sorted(out, key=lambda c: (_page_key(c.get("page")), c["path"]))
+
+
+def _page_key(page: Any) -> tuple[int, str]:
+    """页码排序键。
+
+    页码可能是 int（`page: 6`）也可能是区间字符串（`page: '24-38'`，
+    跨页的表）。直接比较会在混用时抛 TypeError —— 广东合并包里
+    运维分册用了 `5-6`，一加进来 citations_index 就崩。
+    取区间起始页排序，取不到就排到最后。
+    """
+    if isinstance(page, int):
+        return (page, "")
+    s = str(page or "")
+    m = re.match(r"\s*(\d+)", s)
+    return (int(m.group(1)) if m else 10 ** 6, s)
 
 
 def _keywords(text: str) -> list[str]:

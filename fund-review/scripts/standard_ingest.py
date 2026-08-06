@@ -232,8 +232,16 @@ def main() -> None:
     if args.cmd == "validate":
         print(f"{pack.pack_id}：citation 完整性 ✓（公式档案 {pack.formula_profile}）")
         cites = pack.citations_index()
-        print(f"  citation 共 {len(cites)} 条，覆盖第 "
-              f"{min(c['page'] for c in cites)}–{max(c['page'] for c in cites)} 页")
+        # 多分册的包里，页码分属不同分册，混在一起报「覆盖第 X–Y 页」没有意义
+        # 也不可比 —— 按分册分组统计。单册包退化成原来的一行。
+        from collections import defaultdict
+        by_vol: dict[str, list] = defaultdict(list)
+        for c in cites:
+            by_vol[c.get("volume") or "（本册）"].append(c)
+        print(f"  citation 共 {len(cites)} 条，分布于 {len(by_vol)} 册：")
+        for vol, cs in sorted(by_vol.items()):
+            pages = sorted({str(c.get("page")) for c in cs if c.get("page") is not None})
+            print(f"    {vol}：{len(cs)} 条，页 {'、'.join(pages)}")
 
         results = run_regression(pack)
         for r in results:
