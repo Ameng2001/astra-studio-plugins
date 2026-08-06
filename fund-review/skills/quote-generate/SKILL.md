@@ -1,35 +1,74 @@
 ---
 name: quote-generate
-description: '三层合成生成报价输出物 —— BOM × 区域标准包 × 交付配置 → 建设期采购清单、功能点测算表、编制说明、版本锁。支持按历史 BOM 版本时点精确重算。触发词："生成报价", "出造价清单", "算一版报价", "/fund-review:quote-generate"。'
+description: '第三层：区域基准 × 交付方案 × 范围 → 本商机报价。产出建设期采购清单、功能点测算表、运营期清单、TCO 对比、编制说明与版本锁。范围按子系统选、模式从库里挑。触发词："生成报价", "出造价清单", "算一版报价", "只做某几个子系统", "换个交付模式", "/fund-review:quote-generate"。'
 allowed-tools: Read, Write, Bash, Glob
 user-invocable: true
 ---
 
 # quote-generate
 
-把三层正交的输入合成为报价。引擎**不硬编码任何系数** —— 全部经 `StandardPack` 取，
-每个取值都能追到页码级 citation。
+三层里的第三层。它吃**第二层的产物**，施加本商机的决策：
 
-| 层 | 来源 | 提供什么 |
+| 层 | 命令 | 输入 |
 |---|---|---|
-| L0 | `bom/` | 有什么、多大（功能点类型、`app_type` 分类名、`dev_category` 分类名） |
-| L1 | `standard-packs/<region>/` | 这个省怎么算（权重、系数取值、费率、费用科目、负面清单） |
-| L2 | 命令行参数 / `deal.yaml` | 这次怎么卖（计数方法、项目类型、复用度、范围） |
+| 一 BOM | `bom_build` | raw-input + 飞书共创 |
+| 二 区域计算 | `baseline_build` | BOM × 标准包 |
+| **三 模式定制** | **`quote_generate`** | **基准 × 交付方案 × 范围** |
+
+引擎**不硬编码任何系数** —— 全部经 `StandardPack` 取，每个取值都能追到页码级 citation。
 
 ## 用法
 
 ```bash
 PLUG=<plugin>/scripts
+
+# 先建区域基准（第二层，一个省算一次给所有商机复用）
+PYTHONPATH=$PLUG python3 $PLUG/baseline_build.py \
+  --bom bom --pack standard-packs/shandong-2024
+
+# 再出报价（第三层）
 PYTHONPATH=$PLUG python3 $PLUG/quote_generate.py \
-  --bom bom --pack standard-packs/shandong-2024 \
-  --out deals/<deal-id> --deal-id "<项目名称>"
+  --baseline baselines/shandong-2024@bom-0.16.0 \
+  --out deals/<deal-id> --deal-id "<项目名称>" \
+  --modes delivery-modes/modes.yaml \
+  --delivery-plan deals/<deal-id>/delivery-plan.yaml
 ```
 
 | 参数 | 说明 |
 |---|---|
-| `--as-of <版本>` | 按该 BOM 版本时点重算 —— **历史报价复现** |
+| `--baseline <dir>` | 第二层产物。**正式报价走这个** —— 产出带基准溯源 |
+| `--bom` + `--pack` | 直连模式，不经第二层。快速试算用，产出**不带基准溯源** |
+| `--mode <名>` / `--mode-lib` | 从模式库按名字挑交付模式，不用每次手写 delivery-plan |
+| `--as-of <版本>` | ⚠️ 已挪到 `baseline_build` —— BOM 版本时点是第一层的坐标 |
 | `--include-placeholders` | 把占位条目计入报价（默认不计） |
-| `--project-type` / `--reuse-level` | 新建 / 升级改造 |
+| `--project-type` | 新建 / 升级改造 —— 决定复用度档位映射 |
+| `--project-factors` | GB/T 36964 项目特征因子，**默认关闭**，不属地方标准 |
+| `--allow-rule-violations` | 有 fail 级违规时仍以 0 退出 —— 仅探索性试算 |
+| `--publish-lark <folder>` | 把 xlsx 导入飞书供在线查看（快照，非维护对象） |
+
+## 范围：按子系统
+
+`delivery-plan.yaml` 的 `scope` 块，与交付形态**共用同一套 match 语法**：
+
+```yaml
+scope:
+  include:
+    - {system: 多角色业务应用-三、站点机构运营端：3.1机构站点管理系统}
+    - {system: 数智底座-平台能力}
+  exclude:
+    - {cls: HARDWARE}
+defaults:                     # 交付形态，语法同上
+  - match: {system: 智能能力中枢-行业专业模型}
+    mode: D5
+```
+
+**不引入「报价模块」**：82 个 l1 里 17% 只有 ≤5 条、数据建设整个只有 1 个，
+挂上范围后报价颗粒度会不可控。子系统是山东标准、客户总表、财评清单三方共同认可的粒度。
+
+**不复用 `scope_tags`**：BOM 的 tags 全是治理标记（`ilf-补齐`/`placeholder`/`采购科目`），
+没有一个是范围标记；给每个商机往 BOM 加一轮「一期/二期」tag，是把商机决策塞回产品事实。
+
+范围外的子系统**列而不计** —— 整段消失财评会认为漏项。按子系统报，不逐条列。
 
 ## 输出
 
@@ -41,7 +80,19 @@ PYTHONPATH=$PLUG python3 $PLUG/quote_generate.py \
 | `deal.lock.json` | 版本锁：BOM 版本 + 标准包 + 交付配置 + 合计 |
 | `costing-result.json` | 机器可读全量结果 |
 
-> 运营期清单与 TCO 属交付方式（P5）范围，本 skill 不产出。
+| `03-运营期费用清单.xlsx` | 逐项运营期成本 + 一致性违规清单 |
+| `04-TCO对比.xlsx` | 各模式的 3 年 / 5 年 TCO |
+
+## 一致性违规不再静默
+
+`fail` 级违规（R-1..R-10）会在**终端末尾**打印、写进**编制说明的独立小节**、
+并让命令**非零退出**。
+
+此前它们只写进 `03` 的一个 sheet，命令静默退出 0 —— 广东 × 全私有化会出一份
+¥921 万的报价，而 D4/D8 对应的科目在广东根本 `not_in_scope`，两个科目无处落账。
+**「检查了但不说」比不检查更糟：它给人一种已经查过的错觉。**
+
+探索性试算加 `--allow-rule-violations` 放行。
 
 ## 三个设计约束
 

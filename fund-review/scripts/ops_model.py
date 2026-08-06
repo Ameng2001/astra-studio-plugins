@@ -44,9 +44,16 @@ class OpsModel:
         self.internal = internal
 
     @classmethod
-    def load(cls, modes_path: Path, internal_path: Path) -> "OpsModel":
+    def load(cls, modes_path: Path, internal_path: Path | None = None) -> "OpsModel":
+        """internal_path 可空 —— 内部成本模型是**商业敏感**的，只在本地有。
+
+        不传时运营期各行仍会展开（形态、payee、in_scope 都来自 modes.yaml），
+        只是金额为 0 并标注「无内部成本模型」。这比崩掉好：
+        运营期**列而不计**本来就是正确做法，漏列才会被财评认为方案不完整。
+        """
         return cls(yaml.safe_load(Path(modes_path).read_text(encoding="utf-8")),
-                   yaml.safe_load(Path(internal_path).read_text(encoding="utf-8")))
+                   yaml.safe_load(Path(internal_path).read_text(encoding="utf-8"))
+                   if internal_path else {})
 
     # ---- 运营期展开 ----
 

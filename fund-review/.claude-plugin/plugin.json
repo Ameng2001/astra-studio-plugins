@@ -1,7 +1,7 @@
 {
   "name": "fund-review",
-  "version": "0.7.0",
-  "description": "End-to-end quote generation and financial-review pre-audit for government IT procurement. Three orthogonal layers: a region-neutral BOM (function-point single source of truth with NESMA quality gates), per-region standard packs where every parameter carries a page-level citation, and per-deal delivery plans covering on-prem/SaaS mixes with operating-period costs and TCO. Generates procurement lists, function-point worksheets, compilation notes and a self-audit report; syncs to Feishu for human-in-the-loop review.",
+  "version": "0.8.0",
+  "description": "End-to-end quote generation and financial-review pre-audit for government IT procurement, split into three tool layers: (1) a region-neutral BOM with a controlled vocabulary and NESMA quality gates, co-created in Feishu; (2) region baselines built from BOM x standard pack where every parameter carries a page-level citation, diffable across regions; (3) per-deal quotes applying delivery mode, subsystem-level scope and project factors. Emits procurement lists, function-point worksheets, operating-period costs, TCO comparison, compilation notes and a self-audit report; consistency violations fail loudly rather than silently.",
   "author": {
     "name": "junchang.w@gmail.com"
   },
