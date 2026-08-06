@@ -37,6 +37,8 @@ class DeliveryPlan:
         self.cost_elements = modes["cost_elements"]
         self.rules = {r["id"]: r for r in modes["rules"]}
         self.plan = plan
+        #: 方案名 —— 进 deal.lock.json，让人一眼看出这份报价按哪套形态算的
+        self.name: str | None = plan.get("name")
 
     @classmethod
     def load(cls, modes_path: Path, plan_path: Path) -> "DeliveryPlan":

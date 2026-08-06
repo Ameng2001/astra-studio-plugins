@@ -619,9 +619,18 @@ class CostingEngine:
 
 
 def lock(result: dict[str, Any], bom: Bom, pack: StandardPack,
-         deal: DealConfig, baseline_lock: dict[str, Any] | None = None) -> dict[str, Any]:
-    """版本锁 —— 凭此可精确重算本次报价。"""
-    return {
+         deal: DealConfig, baseline_lock: dict[str, Any] | None = None,
+         delivery_info: dict[str, Any] | None = None,
+         deal_file: dict[str, Any] | None = None,
+         doc_info: dict[str, Any] | None = None) -> dict[str, Any]:
+    """版本锁 —— 凭此可精确重算本次报价。
+
+    **此前它记不全，所以其实复现不了。** 缺的四项里最要命的是交付形态指派 ——
+    那是第三层最大的杠杆：同一份 BOM 与基准，换个交付方案，金额和待询价项数
+    都会变（实测 C→A：+¥80,000，57 个模型从「不采用」变成 66 项待询价）。
+    lock 里没有它，「凭此可精确重算」就是一句空话。
+    """
+    out = {
         "deal_id": deal.deal_id,
         "bom_version": result["bom_version"],
         "bom_items_in_scope": result["scope"]["items"],
@@ -636,10 +645,18 @@ def lock(result: dict[str, Any], bom: Bom, pack: StandardPack,
             "include_placeholders": deal.include_placeholders,
             "scope_tags": deal.scope_tags,
         },
+        # 交付形态指派：记形态分布与方案名。逐条目 1851 条太长，
+        # 分布 + 方案文件哈希已足以判定「是不是同一套指派」。
+        "delivery": delivery_info,
+        "project_factors": ({"id": (deal.project_factors or {}).get("id"),
+                             "selected": (deal.project_factors or {}).get("selected")}
+                            if deal.project_factors else None),
+        "as_of": deal.as_of_bom_version,
+        "doc": doc_info,
+        # 商机配置文件的**内容哈希**，不是路径 —— 改了文件而路径不变，
+        # 只记路径的 lock 会悄悄失效。与基准锁哈希输入文件同一条纪律。
+        "deal_file": deal_file,
         "totals": result["totals"],
-        "reproduce": (
-            "python3 quote_generate.py --bom <dir> --pack <dir> --deal <deal.yaml> "
-            f"--as-of {result['bom_version']}"),
         # 引第二层的锁，形成 deal → baseline → BOM 的链。
         # 没有它，「这份报价基于哪个基准」只能靠 pack_id 猜 —— 而标准包改一个
         # 系数、pack_id 不变，基准就悄悄过期了。
@@ -650,3 +667,13 @@ def lock(result: dict[str, Any], bom: Bom, pack: StandardPack,
                       "totals": baseline_lock.get("totals")}
                      if baseline_lock else None),
     }
+    # reproduce 放最后生成 —— 它要引用上面已经填好的字段。
+    # 此前这行写着 `--deal <deal.yaml>`，而那个参数**根本不存在**，
+    # 等于在指导别人跑一条跑不通的命令。
+    df = (deal_file or {}).get("path")
+    out["reproduce"] = (
+        f"python3 quote_generate.py --deal {df}" if df else
+        "python3 quote_generate.py --baseline <baselines/…> --out <deals/…> "
+        f"--deal-id {deal.deal_id!r}"
+        + (f" --as-of {deal.as_of_bom_version}" if deal.as_of_bom_version else ""))
+    return out

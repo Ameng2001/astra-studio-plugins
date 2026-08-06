@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -137,6 +138,36 @@ BASE_LABELS = {
     "implementation": "实施费用",
     "other_fees": "其他建设费用",
 }
+
+
+#: `deal.yaml` 里可以声明、并被 CLI 覆盖的字段。
+#: 顺序即优先级：**CLI 显式给了就用 CLI** —— 临时试算要方便；
+#: 没给才用文件 —— 「这次为什么按新建编」必须落在可 review 的文件里，
+#: 不能只活在 shell history。
+DEAL_FILE_KEYS = ["deal_id", "baseline", "as_of", "counting_method",
+                  "project_type", "reuse_level", "include_placeholders",
+                  "delivery_plan", "modes", "internal_cost", "scenarios",
+                  "project_factors", "project_factor_choices"]
+
+
+def load_deal_file(path: Path) -> tuple[dict[str, Any], str]:
+    """读 deal.yaml，返回 (配置, 内容哈希)。
+
+    **哈希的是文件内容不是路径** —— 与基准锁哈希输入文件同一条纪律。
+    只记路径的话，改了文件而路径不变，lock 就悄悄失效了，
+    而 lock 的唯一职责就是「凭此可精确重算」。
+    """
+    import hashlib
+    import yaml as _yaml
+    raw = path.read_bytes()
+    doc = _yaml.safe_load(raw.decode("utf-8")) or {}
+    unknown = set(doc) - set(DEAL_FILE_KEYS) - {"scope", "delivery", "doc", "note"}
+    if unknown:
+        raise SystemExit(
+            f"{path}：无法识别的字段 {sorted(unknown)}\n"
+            f"  可用字段：{DEAL_FILE_KEYS + ['scope', 'delivery', 'doc', 'note']}\n"
+            f"  拼错的字段会被静默忽略 —— 那正是这个检查要防的。")
+    return doc, hashlib.sha256(raw).hexdigest()[:16]
 
 
 def _short_name(deal: str, limit: int = 12) -> str:
@@ -1069,6 +1100,9 @@ def main() -> None:
                     help="本项目在上述因子上的选择（yaml）")
     ap.add_argument("--scenarios", type=Path, nargs="*", default=[],
                     help="用于 TCO 对比的场景预设")
+    ap.add_argument("--deal", type=Path,
+                    help="商机配置 deals/<商机>/deal.yaml —— 第三层决策的单一来源。"
+                         "文件给默认值，显式 CLI 参数覆盖它")
     ap.add_argument("--doc-prefix", help="送审文件名的项目简称，默认取 --deal-id")
     ap.add_argument("--doc-date", help="送审文件名的日期（YYYYMMDD），默认今天")
     ap.add_argument("--doc-status", default="正式版",
@@ -1082,6 +1116,36 @@ def main() -> None:
     args = ap.parse_args()
 
     baseline = baseline_lock = None
+    # deal.yaml 先读 —— 它给的是**默认值**，下面凡是 CLI 显式给了的都覆盖它。
+    deal_doc: dict[str, Any] = {}
+    deal_sha = None
+    if args.deal:
+        deal_doc, deal_sha = load_deal_file(args.deal)
+        print(f"  商机配置 {args.deal}（sha {deal_sha}）")
+        # 判据是「命令行有没有**显式**给」，不是「当前值空不空」——
+        # deal_id / doc_status 这类有非空默认值的字段，用值判断永远读不到文件。
+        given = {a.split("=", 1)[0].lstrip("-").replace("-", "_")
+                 for a in sys.argv[1:] if a.startswith("--")}
+        PATHS = {"baseline", "delivery_plan", "modes", "internal_cost",
+                 "project_factors", "project_factor_choices"}
+        for k in DEAL_FILE_KEYS:
+            if k not in deal_doc or k in given:
+                continue
+            v = deal_doc[k]
+            if v is None:            # 显式写 null = 用默认，不是路径
+                continue
+            # 路径类字段按 deal.yaml 所在目录解析 —— 相对路径才有意义
+            if k in PATHS:
+                v = Path(v) if Path(v).is_absolute() else (args.deal.parent / v).resolve()
+            elif k == "scenarios":
+                v = [Path(x) if Path(x).is_absolute() else (args.deal.parent / x).resolve()
+                     for x in v]
+            setattr(args, k, v)
+        for k, dest in (("prefix", "doc_prefix"), ("status", "doc_status"),
+                        ("date", "doc_date")):
+            if (deal_doc.get("doc") or {}).get(k) is not None and dest not in given:
+                setattr(args, dest, str(deal_doc["doc"][k]))
+
     if args.baseline:
         baseline, baseline_lock, bom, pack = load_baseline(args.baseline)
         counting_method = baseline["counting_method"]
@@ -1175,8 +1239,28 @@ def main() -> None:
     f_notes = out / gov_sheet.doc_name(pfx, "Z05", "编制说明", ver, dt,
                                        args.doc_status).replace(".xlsx", ".md")
     emit_notes(bom, result, pack, deal, f_notes, rule_violations=violations)
+    # 交付形态指派进 lock —— 这是第三层最大的杠杆，此前没记，
+    # 「凭此可精确重算」因此是空话。
+    delivery_info = None
+    if delivery is not None:
+        import hashlib
+        from collections import Counter as _C
+        dist = dict(sorted(_C(delivery.assigned.values()).items()))
+        dp = {"plan_name": (dplan.name if dplan and hasattr(dplan, "name") else None),
+              "mode_distribution": dist,
+              "items_assigned": len(delivery.assigned)}
+        if plan_path and Path(plan_path).exists():
+            dp["plan_path"] = str(plan_path)
+            dp["plan_sha256_16"] = hashlib.sha256(
+                Path(plan_path).read_bytes()).hexdigest()[:16]
+        delivery_info = dp
+    deal_file_info = ({"path": str(args.deal), "sha256_16": deal_sha}
+                      if args.deal and deal_sha else None)
+    doc_info = {"prefix": pfx, "status": args.doc_status, "date": dt}
     (args.out / "deal.lock.json").write_text(
-        json.dumps(lock(result, bom, pack, deal, baseline_lock),
+        json.dumps(lock(result, bom, pack, deal, baseline_lock,
+                        delivery_info=delivery_info, deal_file=deal_file_info,
+                        doc_info=doc_info),
                    ensure_ascii=False, indent=2),
         encoding="utf-8")
     (out / "costing-result.json").write_text(

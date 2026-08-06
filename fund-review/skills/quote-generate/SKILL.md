@@ -19,6 +19,30 @@ user-invocable: true
 
 ## 用法
 
+### 推荐用法：一个 `--deal` 参数
+
+```bash
+PYTHONPATH=$PLUG python3 $PLUG/quote_generate.py \
+    --deal deals/<商机>/deal.yaml --out deals/<商机>
+```
+
+`deal.yaml` 是**第三层决策的单一来源**：基准、计数方法、项目类型、交付方案、
+场景、项目特征因子、文档命名。此前这些散在 5 处（delivery-plan / modes /
+CLI 参数 / 两个因子文件 / 一个从没启用的 scope_filter），
+于是 `deal.lock.json` 只记住 5 项、漏 4 项 —— 其中**交付形态指派**是本层
+最大的杠杆（换个方案，金额与待询价项数都变），漏了它「凭此可精确重算」
+就是空话。
+
+**CLI 显式给的参数覆盖文件。** 临时试算方便；但「这次为什么按新建编」
+必须落在可 review 的文件里，不能只活在命令历史。判据是「命令行有没有显式
+给」，不是「当前值空不空」—— 后者会让 `deal_id` 这类有非空默认值的字段
+永远读不到文件。
+
+`deal.lock.json` 现在记 `deal.yaml` 的**内容哈希**（不是路径）——
+改了文件而路径不变，只记路径的 lock 会悄悄失效。
+
+---
+
 ```bash
 PLUG=<plugin>/scripts
 

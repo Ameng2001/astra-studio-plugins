@@ -649,6 +649,66 @@ raises("未支持的 given 形态要报错",
 
 
 
+# ============================================================================
+# 第三层商机配置 —— deal.yaml 与版本锁的完整性
+#
+# 此前第三层决策散在 5 处（delivery-plan / modes / CLI 参数 / 两个因子文件 /
+# 一个从没启用的 scope_filter），deal.lock.json 只记住 5 项、漏 4 项。
+# 漏的里面最要命的是**交付形态指派** —— 那是本层最大的杠杆：同一份 BOM 与
+# 基准，换个交付方案金额与待询价项数都会变。lock 里没有它，
+# 「凭此可精确重算」就是空话。
+#
+# 更说明问题的是：lock 的 reproduce 字段早就写着 `--deal <deal.yaml>`，
+# 而那个参数**根本不存在** —— 设计过、没实现，然后那行字留在文件里
+# 指导别人跑一条跑不通的命令。
+# ============================================================================
+import quote_generate as qg
+from costing_engine import DealConfig as _DC, lock as _lock
+
+with tempfile.TemporaryDirectory() as _td:
+    _p = Path(_td) / "deal.yaml"
+    _p.write_text("deal_id: 测试商机\nproject_type: 新建\n", encoding="utf-8")
+    doc, sha = qg.load_deal_file(_p)
+    check("deal.yaml 能读", doc["deal_id"], "测试商机")
+    check("返回内容哈希（不是路径）", len(sha), 16)
+    # 同内容同哈希、改一个字符就变 —— 这是「记内容不记路径」的意义
+    _p2 = Path(_td) / "other.yaml"
+    _p2.write_text("deal_id: 测试商机\nproject_type: 新建\n", encoding="utf-8")
+    check("同内容不同路径 → 同哈希", qg.load_deal_file(_p2)[1], sha)
+    _p2.write_text("deal_id: 测试商机\nproject_type: 升级改造\n", encoding="utf-8")
+    check("内容变了哈希就变", qg.load_deal_file(_p2)[1] != sha, True)
+    # 拼错的字段必须报错，不能静默忽略
+    _p3 = Path(_td) / "typo.yaml"
+    _p3.write_text("deal_id: x\nprojectType: 新建\n", encoding="utf-8")
+    raises("拼错的字段要报错（静默忽略最危险）",
+           lambda: qg.load_deal_file(_p3), SystemExit, "无法识别的字段")
+
+# lock 必须记全四项 —— 少一项就复现不了
+_res = {"bom_version": "0.1.0", "scope": {"items": 3},
+        "totals": {"construction_total": 100.0}}
+class _P:
+    pack_id = "t"; formula_profile = "shandong_v1"; data = {}
+_lk = _lock(_res, None, _P(), _DC(deal_id="d"),
+            delivery_info={"plan_name": "全私有化",
+                           "mode_distribution": {"D1": 3}, "items_assigned": 3},
+            deal_file={"path": "deals/x/deal.yaml", "sha256_16": "abc123"},
+            doc_info={"prefix": "p", "status": "正式版", "date": "20260101"})
+for k in ("delivery", "project_factors", "as_of", "doc", "deal_file"):
+    check(f"lock 记录 {k}", k in _lk, True)
+check("lock 记住交付方案名", _lk["delivery"]["plan_name"], "全私有化")
+check("reproduce 指向真实存在的 --deal",
+      _lk["reproduce"], "python3 quote_generate.py --deal deals/x/deal.yaml")
+# 没有 deal.yaml 时 reproduce 不该编造一个不存在的文件。
+# 注意判据要精确：`"--deal" in s` 会被 `--deal-id` 命中 —— 断言不精确
+# 就会在「没问题」和「有问题」之间给出同一个答案。
+_lk2 = _lock(_res, None, _P(), _DC(deal_id="d"))
+check("无 deal 文件时 reproduce 不引用 deal.yaml",
+      "deal.yaml" in _lk2["reproduce"], False)
+check("无 deal 文件时 reproduce 仍可跑（给 --baseline 路径）",
+      "--baseline" in _lk2["reproduce"], True)
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:
