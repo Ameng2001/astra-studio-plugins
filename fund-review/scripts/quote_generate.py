@@ -488,10 +488,142 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
     par, rows = emit_pricing_params(wb, result, pack, method, items)
     emit_whatif(wb, result, pack, engine, items, method, par, rows)
 
+    emit_scope_whatif(wb, result, pack, engine, items, par, rows)
+
     gov_sheet.save(wb, path,
                    sheets_expected=["00_测算汇总", "01_功能点明细",
-                                    "02_计价参数", "03_试算"])
+                                    "02_计价参数", "03_试算", "04_交付试算"])
 
+
+
+def _progressive_xl(cell: str, table: list) -> str:
+    """把超额累进写成 Excel 表达式（基数单位：万元）。
+
+    引擎侧是 `profile.progressive()`，这里重走一遍分档 —— 两处分叉的话
+    试算表算出来的钱就和送审值对不上。所以调用侧必须用
+    `gov_sheet.formula(..., engine=...)` 自验，对不上拒绝出表。
+
+    形如 `MIN(B,300)*0.02 + MAX(0,MIN(B,500)-300)*0.016 + …`
+    """
+    terms, low = [], 0.0
+    for cap, rate in table:
+        hi = "1E+15" if cap is None else str(cap)
+        seg = (f"MIN({cell},{hi})" if low == 0
+               else f"MAX(0,MIN({cell},{hi})-{low:g})")
+        terms.append(f"{seg}*{rate}")
+        if cap is None:
+            break
+        low = cap
+    return "+".join(terms)
+
+
+def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
+                      engine, items, par, prows: dict[str, int]) -> None:
+    """04 交付试算 —— 勾掉一个子系统，看全盘怎么动。
+
+    ## 为什么只做「范围」这一维
+
+    **范围是纯加减，Excel 表达得了；交付形态不是。** 形态一改，走的就不是
+    同一套公式（CE-DEV 走功能点法进建设期、CE-SUB 走订阅进运营期、D0 完全
+    不计），那是分派逻辑。硬做只能写成一堆嵌套 IF，脆而且骗人 ——
+    要比形态请看 Z04 的三个场景，那里每个数都由引擎算定。
+
+    ## 一个不能忽略的链条
+
+    其他建设费用是**项目级派生**的：设计费以软件开发费为基数、测试费以
+    三项之和为基数，且都是超额累进。所以勾掉一个子系统不是简单减掉它那行 ——
+    基数变了，设计费与测试费要跟着重算。
+
+    实测：排除「生态运营与交易中台」，软件开发费 −¥848,382.60、
+    其他费用 −¥16,300，合计 −¥864,682.60。只减第一项就少算了 1.9%。
+    """
+    sw = result["software_dev"]
+    fees = {f["id"]: f for f in result["other_fees"]}
+    t = result["totals"]
+    # 不随子系统范围变的部分：硬件无 system 字段、实施费按形态、采购待询价为 0
+    fixed = t["hardware_purchase"] + t.get("implementation", 0.0) \
+        + t["software_purchase"] + t["data_purchase"]
+
+    s = gov_sheet.GovSheet(
+        wb, "04_交付试算", title=f"{result['deal']}　范围试算",
+        subtitle="改「本次在范围内」列（白格）→ 建设期合计与其他费用即时重算。"
+                 "**只试范围，不试交付形态** —— 形态一改走的不是同一套公式，"
+                 "要比形态看 Z04 的三个场景。",
+        columns=[
+            gov_sheet.Col("子系统", width=40),
+            gov_sheet.Col("条目数", "int", width=9),
+            gov_sheet.Col("调整后功能点", "fp", width=13),
+            gov_sheet.Col("软件开发费（元）", "money", width=16),
+            gov_sheet.Col("本次在范围内", width=13, cell_role="input"),
+            gov_sheet.Col("计入建设期（元）", "money", width=16, sum=True,
+                          cell_role="calc"),
+        ])
+    C = {}
+    first = s._next
+    for x in sw["systems"]:
+        r = s._next
+        if not C:
+            C = {n: get_col_letter(s, n) for n in
+                 ("软件开发费（元）", "本次在范围内", "计入建设期（元）")}
+        s.row({"子系统": x["system"], "条目数": x["items"],
+               "调整后功能点": x["afp"], "软件开发费（元）": x["cost"],
+               "本次在范围内": "是",
+               "计入建设期（元）": gov_sheet.formula(
+                   f'=IF({C["本次在范围内"]}{r}="是",{C["软件开发费（元）"]}{r},0)',
+                   x["cost"], x["cost"],
+                   where=f"[04_交付试算] {x['system'][:18]}")})
+    last = s._next - 1
+    s.total("软件开发费合计", expect={"计入建设期（元）": sw["total"]})
+    sum_row = s._next - 1
+    SW = f"{C['计入建设期（元）']}{sum_row}"          # 软件开发费合计（元）
+    SW_W = f"({SW}/10000)"                            # 万元
+
+    # ---- 项目级派生：其他建设费用随基数重算 ----
+    s.blank()
+    s.note("　【其他建设费用】以上面的软件开发费合计为基数**重新计算** —— "
+           "勾掉子系统不是简单减掉那一行，基数变了这几项都要跟着变。")
+    d_first = s._next
+    for fid, label, base_expr in [
+        ("design", "项目设计费", SW_W),
+        ("integration_hardware", "硬件设备集成费", f"({fixed and t['hardware_purchase'] or 0}/10000)"),
+        ("third_party_test", "第三方软件测试费",
+         f"({SW}+{t['software_purchase']}+{t['hardware_purchase']})/10000"),
+    ]:
+        f = fees.get(fid)
+        if not f:
+            continue
+        spec = next((x for x in (pack.data.get("other_fees") or [])
+                     if x["id"] == fid), {})
+        if f["method"] == "progressive":
+            expr = (f"=ROUND(ROUND({_progressive_xl(base_expr, spec['table'])},2)"
+                    f"*10000,2)")
+        else:
+            expr = f"=ROUND(ROUND({base_expr}*{spec.get('max_rate', 0)},2)*10000,2)"
+        s.row({"子系统": f"　{label}", "本次在范围内": "自动",
+               "计入建设期（元）": gov_sheet.formula(
+                   expr, f["amount_yuan"], f["amount_yuan"],
+                   where=f"[04_交付试算] {label}")})
+    d_last = s._next - 1
+
+    s.blank()
+    s.row({"子系统": "　硬件设备购置费 / 实施费 / 采购类（不随子系统范围变）",
+           "本次在范围内": "固定",
+           "计入建设期（元）": fixed})
+    fix_row = s._next - 1
+    col = C["计入建设期（元）"]
+    s.row({"子系统": "**建设期合计**", "本次在范围内": "",
+           "计入建设期（元）": gov_sheet.formula(
+               f"={col}{sum_row}+SUM({col}{d_first}:{col}{d_last})+{col}{fix_row}",
+               t["construction_total"], t["construction_total"],
+               where="[04_交付试算] 建设期合计", rel_tol=0.0001)})
+    s.note(f"　送审值（00_测算汇总 / Z00）建设期合计：¥{t['construction_total']:,.2f}。"
+           f"未改任何白格时本表应与之相等。")
+    s.note("　试算用法：把某个子系统的「本次在范围内」改成「否」→ 该行不计、"
+           "其他费用按新基数重算、合计即时更新。")
+    s.note("　⚠ 被排除的子系统在正式清单里走「**列而不计**」—— 末节列出并"
+           "注明原因，不是消失。范围一旦定下，请改 deal.yaml 的 scope 块重跑，"
+           "不要以本表为准。")
+    s.finish()
 
 
 def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,

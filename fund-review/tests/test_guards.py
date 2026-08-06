@@ -752,6 +752,36 @@ with tempfile.TemporaryDirectory() as _td2:
 
 
 
+# --- 超额累进的 Excel 表达式必须与引擎同解 ---
+# 04_交付试算 里其他费用要随基数重算，所以分档逻辑被搬进了 Excel。
+# 两处实现分叉，试算表算出来的钱就和送审值对不上。
+TBL2 = [[300, 0.02], [500, 0.016], [1000, 0.0128], [2000, 0.0102],
+        [5000, 0.0082], [None, 0.0066]]
+_x = qg._progressive_xl("B2", TBL2)
+check("首档用 MIN，无 MAX(0,…)", _x.startswith("MIN(B2,300)*0.02"), True)
+check("末档不封顶", "1E+15" in _x, True)
+check("档数与表一致", _x.count("*"), len(TBL2))
+
+def _eval_xl(expr: str, base: float) -> float:
+    """按 Excel 语义求值 —— 只为测试，不进生产。
+
+    只替换函数名，不用正则拆参数：`MAX(0,MIN(B,500)-300)` 是嵌套的，
+    按参数拆的正则匹配不上嵌套，会让归一化循环永不终止（踩过）。
+    """
+    e = expr.replace("B2", f"({base})").replace("MIN(", "min(").replace("MAX(", "max(")
+    return eval(e, {"__builtins__": {}}, {"min": min, "max": max})
+
+
+from formula_profiles.shandong_v1 import progressive as _prog
+for base in (100.0, 300.0, 800.0, 1055.44, 6000.0):
+    xl = round(_eval_xl(_x, base), 2)
+    eng = _prog(base, TBL2)
+    check(f"基数 {base} 万：Excel 式与引擎同解", xl, eng)
+# 标准 p.11 自带算例
+check("锁标准算例：800 万 → 13.04 万", round(_eval_xl(_x, 800.0), 2), 13.04)
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:
