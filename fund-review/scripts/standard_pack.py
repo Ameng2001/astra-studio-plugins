@@ -158,6 +158,46 @@ class StandardPack:
                 return f
         raise PackError(f"{self.pack_id}: 无费用项 {fee_id}")
 
+    def vocabulary_coverage(self, vocab) -> dict[str, dict[str, Any]]:
+        """本包对 BOM 规范词表的覆盖情况。
+
+        `factor()` 在取不到值时报错报得很清楚，但那是**算到那一条才报**，
+        一次一条。做梅州项目时不该在生成第 800 行报价时才发现「通信控制」
+        这个省没有 —— 应该在选定标准包的那一刻就知道缺口有多大。
+
+        三种状态：
+          ok        本包有取值，或有别名指向本包的取值
+          unmapped  本包**显式声明**无对应类别（带 unmapped_note）—— 这是
+                    已知缺口，不是遗漏；用到时须业务侧裁定归入哪一类
+          missing   既无取值也无声明 —— 真正的遗漏，接新省份时最该先补这个
+          n/a       本包没有这个维度（如广东无 dev_category）
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for group in ("app_type", "dev_category"):
+            allowed = vocab.values(group)
+            if not allowed:
+                continue
+            node = self.data.get("factors", {}).get(group) or {}
+            values = node.get("values") or {}
+            if not values:
+                out[group] = {"status": "n/a", "note": node.get("note", "本包无此维度"),
+                              "ok": [], "unmapped": [], "missing": []}
+                continue
+            aliases = node.get("aliases") or {}
+            declared = set(node.get("unmapped") or [])
+            ok, unmapped, missing = [], [], []
+            for key in allowed:
+                if aliases.get(key, key) in values:
+                    ok.append(key)
+                elif key in declared:
+                    unmapped.append(key)
+                else:
+                    missing.append(key)
+            out[group] = {"status": "incomplete" if missing else "ok",
+                          "ok": ok, "unmapped": unmapped, "missing": missing,
+                          "unmapped_note": node.get("unmapped_note", "")}
+        return out
+
     # ---- 合规检查 ----
 
     def delivery_support(self, mode: str) -> dict[str, Any]:

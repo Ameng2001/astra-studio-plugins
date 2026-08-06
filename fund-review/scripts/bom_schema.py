@@ -50,6 +50,50 @@ DUAL_METHOD_CLASSES = {"KB", "DATASET"}
 PURCHASE_ONLY_CLASSES = {"PRODUCT", "MODEL", "HARDWARE", "SERVICE"}
 
 
+@dataclass
+class Vocabulary:
+    """BOM 受控词表 —— 条目能说自己是什么。地域无关，不含任何取值。
+
+    此前 `app_type` / `dev_category` 的合法值实际上借用的是山东包的 factor 键，
+    BOM 依赖了 L1，方向反了；而且 `validate()` 对这两个字段根本不校验，
+    填错要等到算价时 `PackError` 才暴露，一次一条。
+    """
+
+    fields: dict[str, dict[str, Any]] = field(default_factory=dict)
+    purchase_must_omit: list[str] = field(default_factory=list)
+
+    @classmethod
+    def load(cls, root: Path) -> "Vocabulary":
+        p = Path(root) / "vocabulary.yaml"
+        if not p.exists():
+            return cls()          # 未定义词表时不校验，兼容旧 BOM 目录
+        d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        return cls(fields=d.get("fields", {}),
+                   purchase_must_omit=d.get("purchase_classes_must_omit", []))
+
+    def values(self, field_name: str) -> dict[str, str]:
+        return (self.fields.get(field_name) or {}).get("values") or {}
+
+    def check(self, item: "BomItem") -> list[str]:
+        """返回该条目的词表问题。空列表 = 干净。"""
+        out: list[str] = []
+        fp = is_fp_counted(item)
+        for name in ("app_type", "dev_category"):
+            allowed = self.values(name)
+            if not allowed:
+                continue
+            v = getattr(item, name)
+            if fp:
+                if not v:
+                    out.append(f"走功能点法但 {name} 为空")
+                elif v not in allowed:
+                    out.append(f"{name}={v!r} 不在词表 {sorted(allowed)}")
+            elif v and name in self.purchase_must_omit:
+                # 填了会让人以为它参与了测算，而它根本不走功能点法
+                out.append(f"非功能点条目不该有 {name}={v!r}")
+        return out
+
+
 def is_fp_counted(item: "BomItem") -> bool:
     """这一条是否按功能点计。
 
@@ -249,6 +293,9 @@ class Bom:
         self.version = version
         self.items: list[BomItem] = list(items)
         self.taxonomy = taxonomy or {}
+        #: 从哪个目录加载的 —— 门禁据此找 vocabulary.yaml。
+        #: 内存里构造的 BOM（测试、临时快照）没有目录，词表门禁自动跳过。
+        self.root: Path | None = None
 
     def __len__(self) -> int:
         return len(self.items)
@@ -319,7 +366,9 @@ class Bom:
                 raise BomError(f"{p.name}: schema_version={data.get('schema_version')} "
                                f"≠ {SCHEMA_VERSION}，需迁移")
             items.extend(BomItem.from_dict(d) for d in data.get("items", []))
-        return cls(version, items, taxonomy)
+        b = cls(version, items, taxonomy)
+        b.root = root          # 门禁要据此找 vocabulary.yaml
+        return b
 
 
 def default_shard_key(item: BomItem) -> str:

@@ -47,7 +47,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from bom_schema import FP_COUNTED_CLASSES, Bom, BomItem, Nesma, Path_
+from bom_schema import (FP_COUNTED_CLASSES, Bom, BomItem, Nesma, Path_,
+                        Vocabulary)
 from lark_table import BATCH, LarkTableError, lark, replace_all
 
 #: 样例表用 IFPUG 的 EIF，山东标准用 ELF —— 同一概念，双向映射
@@ -87,6 +88,30 @@ def _row(it: BomItem) -> dict[str, Any]:
 # ---- push --------------------------------------------------------------
 
 
+def vocab_rows(vocab: Vocabulary) -> list[dict[str, Any]]:
+    """受控词表 → 飞书行。
+
+    词表是 BOM 的一部分（条目能说自己是什么），所以跟条目一起 push；
+    但**它不是参数** —— 参数表里放的是 NESMA 权重那种带取值的东西，
+    词表只有「有哪些合法值、各是什么意思」，一个数字都没有。
+    分两张表，免得有人以为「智能信息」也有个取值藏在这。
+    """
+    out = []
+    for fname, spec in (vocab.fields or {}).items():
+        note = (spec.get("note") or "").strip().replace("\n", " ")
+        for value, meaning in (spec.get("values") or {}).items():
+            out.append({
+                "字段": spec.get("label") or fname,
+                "字段名": fname,
+                "取值": value,
+                "含义": str(meaning).strip(),
+                "填写要求": spec.get("required_when")
+                            or ("必填" if spec.get("required") else ""),
+                "说明": note[:400],
+            })
+    return out
+
+
 def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
     """按子系统分表覆盖写入。参数表不动 —— 它是人维护的。"""
     bt = cfg["base_token"]
@@ -109,6 +134,15 @@ def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "written": total, "error": str(e)}
         total += n
         detail[system] = n
+    # 词表随条目一起推 —— 它也是 BOM 的一部分，事实源在 bom/vocabulary.yaml
+    vt = cfg.get("vocab_table")
+    if vt:
+        rows = vocab_rows(Vocabulary.load(bom.root))
+        if rows:
+            try:
+                detail["0 词表"] = replace_all(bt, vt, rows, "0 词表")
+            except LarkTableError as e:
+                return {"ok": False, "written": total, "error": str(e)}
     return {"ok": True, "written": total, "detail": detail,
             "bom_version": bom.version}
 

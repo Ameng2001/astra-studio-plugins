@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from bom_schema import (DUAL_METHOD_CLASSES, FP_COUNTED_CLASSES, STATUS_ORDER,
-                        Bom, BomItem, is_fp_counted, is_purchase)
+                        Bom, BomItem, Vocabulary, is_fp_counted, is_purchase)
 
 # 单一功能点类型占比上限 —— 超过即判定为「批量打标」而非逐条识别
 SINGLE_TYPE_MAX_RATIO = 0.80
@@ -281,6 +281,23 @@ def g13_purchase_subject(bom: Bom) -> list[Finding]:
     return out
 
 
+def g14_vocabulary(bom: Bom) -> list[Finding]:
+    """G-14 受控词表 —— app_type / dev_category 合法且该填的填、该空的空。
+
+    这两个字段此前**完全没有校验**，合法值实际借用山东包的 factor 键。
+    填错要等到算价时 `PackError` 才暴露，一次一条；非功能点条目误填则更隐蔽 ——
+    它不会报错，只会让人以为那一条参与了测算。
+    """
+    vocab = Vocabulary.load(bom.root) if bom.root else Vocabulary()
+    if not vocab.fields:
+        return []
+    out = []
+    for it in bom.active():
+        for msg in vocab.check(it):
+            out.append(Finding("G-14", "fail", "draft", "item", it.id, msg))
+    return out
+
+
 def g09_gpu_dependency(bom: Bom) -> list[Finding]:
     """G-09 声明需要推理算力，但 BOM 中无对应硬件条目。"""
     needy = [i for i in bom.active() if i.runtime.needs_inference_gpu]
@@ -379,7 +396,7 @@ GATES: list[Callable[[Bom], list[Finding]]] = [
     g01_identity, g02_nesma_type, g03_type_distribution, g04_missing_ilf,
     g05_description, g06_cross_system_duplicates, g07_class_consistency,
     g08_maturity_evidence, g09_gpu_dependency, g11_name_uniqueness,
-    g12_placeholders, g13_purchase_subject,
+    g12_placeholders, g13_purchase_subject, g14_vocabulary,
 ]
 
 

@@ -1,6 +1,6 @@
 ---
 name: bom-validate
-description: '对造价 BOM 执行质量门禁 G-01..G-13，回答"当前版本能晋升到哪一级、还差什么"。检查功能点类型分布、ILF 缺失、描述可判定性、跨系统重复计列、成熟度举证等。触发词："校验BOM", "BOM质量门禁", "检查功能点拆分", "/fund-review:bom-validate"。'
+description: '对造价 BOM 执行质量门禁 G-01..G-14，回答"当前版本能晋升到哪一级、还差什么"。检查功能点类型分布、ILF 缺失、描述可判定性、跨系统重复计列、成熟度举证等。触发词："校验BOM", "BOM质量门禁", "检查功能点拆分", "/fund-review:bom-validate"。'
 allowed-tools: Read, Write, Bash, Glob
 user-invocable: true
 ---
@@ -39,6 +39,7 @@ PYTHONPATH=<plugin>/scripts python3 <plugin>/scripts/bom_validate.py \
 | G-13a | 采购条目缺科目 / 举证字段 | — | draft |
 | G-13b | 采购条目无单价 | 存在即 | released |
 | G-13c | 采购条目授权/计费方式仍是 TODO | — | reviewed |
+| G-14 | `app_type` / `dev_category` 合法且该填的填、该空的空 | — | draft |
 
 ## 各门禁的判断依据
 
@@ -53,6 +54,11 @@ PYTHONPATH=<plugin>/scripts python3 <plugin>/scripts/bom_validate.py \
   也可按购置计（外部数据的访问权）。同一 class 下两种条目并存是**正常的**，
   但单条只能有一个口径 —— 同时有 `nesma` 与 `spec.subject` 即构成重复计列，阻断 draft。
   筛「按功能点计的条目」一律用 `is_fp_counted()`，不要写 `cls in FP_COUNTED_CLASSES`。
+- **G-14 的两个方向**：功能点条目**必须**有 `app_type` / `dev_category`，
+  非功能点条目**必须没有**。后者不会报错，只会让人以为那条参与了测算。
+  合法值来自 `bom/vocabulary.yaml`（BOM 的受控词表，地域无关）——
+  在此之前这两个字段的合法值实际借用的是山东包的 factor 键，BOM 依赖了 L1，
+  方向反了；填错要等到算价时 `PackError` 才暴露，一次一条。
 - **G-13 分三档**是因为这三件事的补齐时机完全不同：科目与举证清单是**编制时**
   就该定的（定不了说明没想清楚该报哪一行）；单价等商务询价单；授权方式（买断/期限/
   按年订阅）决定该条进建设期还是运营期，得在共创环节裁定。
