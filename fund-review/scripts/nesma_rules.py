@@ -182,18 +182,72 @@ def g03_type_distribution(bom: Bom) -> list[Finding]:
 
 
 def g04_missing_ilf(bom: Bom) -> list[Finding]:
-    """G-04 无 ILF 的 system —— 应用必然维护逻辑文件，零 ILF 是系统性漏计。"""
+    """G-04 无任何逻辑文件的 system —— 系统性漏计。
+
+    查的是 **ILF + ELF 都为零**，不是只查 ILF。一个子系统可以合理地不维护
+    自己的数据（纯展示/纯推理），但它总得**引用**什么 —— EO/EQ 按定义要
+    引用逻辑文件。两者都是 0 意味着这批功能点凭空产出数据，不成立。
+
+    只查 ILF 会把「正确地全部记为 ELF」的子系统误报，那是在惩罚正确建模。
+    """
     out = []
     for system, items in bom.by_system().items():
         fp_items = [i for i in items if is_fp_counted(i)]
         if len(fp_items) < 5:
             continue
         types = Counter(i.nesma.type for i in fp_items)
-        if types.get("ILF", 0) == 0:
+        if types.get("ILF", 0) + types.get("ELF", 0) == 0:
             out.append(Finding("G-04", "fail", "reviewed", "system", system,
-                               f"{len(fp_items)} 个功能点中无任何 ILF —— "
-                               f"违反 NESMA 基本规则（应用必然维护逻辑文件）",
+                               f"{len(fp_items)} 个功能点中 ILF 与 ELF 均为 0 —— "
+                               f"EO/EQ 按定义须引用逻辑文件，两者皆无不成立",
                                {"distribution": dict(types)}))
+    return out
+
+
+def g15_shared_logical_file(bom: Bom) -> list[Finding]:
+    """G-15 同一逻辑数据组跨子系统重复记 ILF。
+
+    规则：**一份逻辑数据组只有一个维护方**，维护方记 ILF（权重 10），
+    其余引用方记 ELF（权重 7）。
+
+    这条是 G-04 的镜像，也是它此前照不到的地方：G-04 只问「有没有 ILF」，
+    答得上就放行 —— 于是「长者档案」在 5 个子系统各记一次 ILF、「订单」记 6 次，
+    合计 25 条重复计列（250 UFP），全部通过门禁。
+
+    真正的风险不是那点 UFP，是评审一眼看穿重复计列之后，**整份功能点计数
+    都需要重新举证**。所以这条按 fail 报，且阻断 reviewed。
+
+    重名而非同物的情况（如「文档」在行政域与智能体域各有一份）用
+    `nesma.logical_file_note` 说明后即视为已裁定，不再报。
+    """
+    out = []
+    groups: dict[str, list] = defaultdict(list)
+    for i in bom.active():
+        if not is_fp_counted(i) or i.nesma.type != "ILF":
+            continue
+        key = i.name.replace("-维护", "").replace("-台账", "").strip()
+        groups[key].append(i)
+
+    for name, members in sorted(groups.items()):
+        if len(members) < 2:
+            continue
+        # 已逐条裁定过（写了判定依据）的不再报 —— 包括「重名不同物」
+        undecided = [i for i in members
+                     if not (i.nesma.logical_file_note or "").strip()]
+        if not undecided:
+            continue
+        systems = sorted({i.path.system for i in members})
+        out.append(Finding(
+            "G-15", "fail", "reviewed", "bom", name,
+            f"逻辑数据组「{name}」在 {len(systems)} 个子系统各记一次 ILF —— "
+            f"一份数据只能有一个维护方，其余应记 ELF（10→7）；"
+            f"其中 {len(undecided)} 条尚未裁定",
+            {"systems": systems,
+             "undecided_ids": [i.id for i in undecided][:8],
+             "excess_ufp": (len(members) - 1) * 10,
+             "fix": "维护方填 nesma.logical_file_role=maintainer，"
+                    "引用方改 type=ELF 且 logical_file_role=reference；"
+                    "确属重名不同物的，写 logical_file_note 说明即可"}))
     return out
 
 
@@ -397,6 +451,7 @@ GATES: list[Callable[[Bom], list[Finding]]] = [
     g05_description, g06_cross_system_duplicates, g07_class_consistency,
     g08_maturity_evidence, g09_gpu_dependency, g11_name_uniqueness,
     g12_placeholders, g13_purchase_subject, g14_vocabulary,
+    g15_shared_logical_file,
 ]
 
 

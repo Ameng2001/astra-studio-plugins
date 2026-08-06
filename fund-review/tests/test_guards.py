@@ -473,6 +473,80 @@ gs.GovSheet(wb_r, "01_明细", title="T",
 
 
 
+# ============================================================================
+# 共享逻辑文件 —— 一份数据组只有一个维护方
+#
+# 「长者档案」曾在 5 个子系统各记一次 ILF、「订单」6 次，合计 25 条重复计列
+# （250 UFP），而 G-04 只问「有没有 ILF」，答得上就全部放行。
+# 真正的风险不是那点 UFP，是评审一眼看穿重复计列后整份计数都要重新举证。
+# ============================================================================
+import nesma_rules as nr
+
+def _nesma(**kw):
+    kw.setdefault("type", "ILF")
+    return Nesma(**kw)
+
+# 角色与类型必须自洽 —— 「引用方」却记 ILF 就是在重复计列
+raises("标 reference 却记 ILF 要报错",
+       lambda: _nesma(type="ILF", logical_file_role="reference",
+                      logical_file_note="x").validate("T.1"),
+       BomError, "应记 ELF")
+raises("标 maintainer 却记 ELF 要报错",
+       lambda: _nesma(type="ELF", logical_file_role="maintainer",
+                      logical_file_note="x").validate("T.2"),
+       BomError, "应记 ILF")
+raises("填了角色却没写依据要报错",
+       lambda: _nesma(type="ELF", logical_file_role="reference").validate("T.3"),
+       BomError, "无从复核")
+raises("非法角色值要报错",
+       lambda: _nesma(logical_file_role="owner", logical_file_note="x").validate("T.4"),
+       BomError, "maintainer")
+_nesma(type="ELF", logical_file_role="reference",
+       logical_file_note="引用「订单」，维护方为生态中台").validate("T.5")   # 自洽即通过
+_nesma().validate("T.6")                       # 不跨子系统共享，不填角色也通过
+
+
+def _bom_of(*specs):
+    """specs: (id, system, name, type, note)"""
+    return Bom("0.1.0", [BomItem(
+        id=i, cls="SOFTWARE_FP", name=n,
+        path=Path_(product_line="P", system=s),
+        description="支持" + n + "的维护，描述长度需要够判定类型。",
+        nesma=Nesma(type=ty, logical_file_note=note or None,
+                    logical_file_role=("reference" if ty == "ELF" and note else
+                                       "maintainer" if ty == "ILF" and note else None)),
+        since="0.1.0") for i, s, n, ty, note in specs])
+
+# 同名 ILF 跨子系统 → G-15 报
+b_dup = _bom_of(("FP.A.0001", "系统甲", "长者档案", "ILF", ""),
+                ("FP.B.0001", "系统乙", "长者档案", "ILF", ""))
+f = nr.g15_shared_logical_file(b_dup)
+check("跨子系统重复记 ILF 要报 G-15", [x.gate for x in f], ["G-15"])
+check("G-15 报出多计的 UFP", f[0].detail["excess_ufp"], 10)
+check("G-15 阻断 reviewed", f[0].blocks, "reviewed")
+
+# 改判后不再报
+b_fix = _bom_of(("FP.A.0001", "系统甲", "长者档案", "ILF", "本组维护方"),
+                ("FP.B.0001", "系统乙", "长者档案", "ELF", "引用，维护方为系统甲"))
+check("改判 ELF 后不再报", nr.g15_shared_logical_file(b_fix), [])
+
+# 重名不同物：写了依据即视为已裁定
+b_col = _bom_of(("FP.A.0001", "系统甲", "文档", "ILF", "行政公文，与智能体文档非同物"),
+                ("FP.B.0001", "系统乙", "文档", "ILF", "智能体知识文档，与公文非同物"))
+check("重名不同物写了依据就不再报", nr.g15_shared_logical_file(b_col), [])
+
+# G-04 查的是 ILF+ELF 都为 0，不是只查 ILF ——
+# 只查 ILF 会误报「正确地全部记为 ELF」的子系统，那是在惩罚正确建模
+b_elf = _bom_of(*[(f"FP.C.{n:04d}", "系统丙", f"数据{n}", "ELF", "引用外部")
+                  for n in range(1, 7)])
+check("全部正确记为 ELF 的子系统不该被 G-04 误报",
+      nr.g04_missing_ilf(b_elf), [])
+b_none = _bom_of(*[(f"FP.D.{n:04d}", "系统丁", f"输出{n}", "EO", "")
+                   for n in range(1, 7)])
+check("ILF 与 ELF 皆无要报 G-04", [x.gate for x in nr.g04_missing_ilf(b_none)], ["G-04"])
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:

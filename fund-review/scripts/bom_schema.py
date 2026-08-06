@@ -142,10 +142,33 @@ class Nesma:
     reviewed_by: str | None = None   # 双人复核 —— released 起必填
     det_hint: int | None = None      # 数据元素个数，供后续升级到详细功能点法
     ret_hint: int | None = None
+    #: 逻辑文件在**跨子系统共享**时的角色。规则：一份逻辑数据组只有一个维护方，
+    #: 维护方记 ILF（权重 10），其余引用方记 ELF（权重 7）。
+    #: 不填 = 该逻辑文件不跨子系统共享，无需区分。
+    logical_file_role: str | None = None    # maintainer | reference
+    logical_file_note: str | None = None    # 判定依据 —— 谁维护、凭什么
 
     def validate(self, item_id: str) -> None:
         if self.type not in NESMA_TYPES:
             raise BomError(f"{item_id}: nesma.type={self.type!r} 不在 {sorted(NESMA_TYPES)}")
+        if self.logical_file_role not in (None, "maintainer", "reference"):
+            raise BomError(
+                f"{item_id}: nesma.logical_file_role={self.logical_file_role!r} "
+                f"须为 maintainer | reference")
+        # 角色与类型必须自洽 —— 「引用方」却记 ILF 就是在重复计列，
+        # 而这正是加这两个字段要防的事。
+        if self.logical_file_role == "reference" and self.type != "ELF":
+            raise BomError(
+                f"{item_id}: 标为 reference（引用方）却记 {self.type}；"
+                f"引用他方维护的逻辑数据组应记 ELF（外部逻辑文件，权重 7）")
+        if self.logical_file_role == "maintainer" and self.type != "ILF":
+            raise BomError(
+                f"{item_id}: 标为 maintainer（维护方）却记 {self.type}；"
+                f"维护方应记 ILF（内部逻辑文件，权重 10）")
+        if self.logical_file_role and not (self.logical_file_note or "").strip():
+            raise BomError(
+                f"{item_id}: 填了 logical_file_role 却没写 logical_file_note —— "
+                f"「凭什么这个子系统是维护方」必须有据可查，否则改判无从复核")
 
 
 @dataclass
