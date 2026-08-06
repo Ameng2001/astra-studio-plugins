@@ -19,6 +19,8 @@ from typing import Any
 
 import yaml
 
+from nesma_weights import xlround
+
 #: 这些段落下的叶子节点必须能溯源到 citation
 CITATION_REQUIRED = ("fp_counting", "factors", "rates", "other_fees",
                      "procurement_evidence", "fp_exclusions")
@@ -30,14 +32,21 @@ class PackError(ValueError):
 
 @dataclass
 class Citation:
-    page: int
+    page: int | str
     section: str | None = None
     quote: str | None = None
+    #: 出自哪一分册。广东是「一个总则 + 四个各自迭代的分册」，
+    #: 页码只有配上分册名才唯一 —— 「p.10」在运维分册和基础设施分册是两处。
+    #: 此前这个字段没有，`pack.value()` 打到任何带 volume 的路径直接 TypeError；
+    #: 没人碰到只是因为没人对分册里的取值调过 value()。
+    volume: str | None = None
 
     def __str__(self) -> str:
         s = f"p.{self.page}"
         if self.section:
             s += f" {self.section}"
+        if self.volume:
+            s = f"《{self.volume}》{s}"
         return s
 
 
@@ -315,8 +324,33 @@ def run_regression(pack: StandardPack) -> list[dict[str, Any]]:
         given = case["given"]
         if "fee_id" in given:
             actual = profile.other_fee(pack, given["fee_id"], given["base_wan"])
+        elif "expr" in given:
+            # 标准正文自带的推导式，如广东运维服务分册 p.10：
+            #   运维功能点单价 = 20000 / 174 × 1.04 = 119.54 元/功能点
+            # 这类算例不走费用科目，而是**直接验一条算式**。此前框架只认
+            # fee_id，于是这种算例根本没法登记 —— 广东 regression 一直是空的，
+            # 「验证通过」只验了 citation 完整性，数值一条没验。
+            #
+            # 取值从 `inputs` 的 dotted path 到包里取，**不在用例里重写一遍数字**：
+            # 用例里抄一份就成了第二处真相，改了包不改用例，回归照样绿。
+            env = {k: pack.value(dot)[0] if isinstance(dot, str) else dot
+                   for k, dot in (given.get("inputs") or {}).items()}
+            bad = [k for k, v in env.items() if not isinstance(v, (int, float))]
+            if bad:
+                raise PackError(
+                    f"回归用例 {case['id']} 的输入 {bad} 不是数值 —— "
+                    f"inputs 里写的是包内 dotted path，取出来必须能算")
+            try:
+                actual = eval(given["expr"], {"__builtins__": {}}, dict(env))
+            except Exception as e:
+                raise PackError(
+                    f"回归用例 {case['id']} 的 expr 算不出来：{e}\n"
+                    f"  expr={given['expr']!r}　可用变量={sorted(env)}")
+            actual = xlround(float(actual), given.get("digits", 2))
         else:
-            raise PackError(f"回归用例 {case['id']} 的 given 形态未支持")
+            raise PackError(
+                f"回归用例 {case['id']} 的 given 形态未支持；"
+                f"现支持 {{fee_id, base_wan}} 或 {{expr, inputs[, digits]}}")
         ok = abs(actual - case["expect"]) < 1e-9
         results.append({"id": case["id"], "expect": case["expect"],
                         "actual": actual, "ok": ok,

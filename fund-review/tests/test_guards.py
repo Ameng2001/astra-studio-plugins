@@ -618,6 +618,37 @@ raises("分解与引擎总额不符要报错",
 
 
 
+# --- 回归用例：expr 形态 + Citation 支持分册 ---
+# 广东的 regression 一直是空的 —— 框架只认 {fee_id, base_wan}，
+# 而广东正文自带的是「20000/174×1.04=119.54」这类直接算式，登记不进去。
+# 于是 `validate` 只验了 citation 完整性，**数值一条没验**。
+from standard_pack import Citation, PackError, StandardPack, run_regression
+
+check("Citation 支持分册（广东一个总则+四个分册，页码要配分册才唯一）",
+      str(Citation(page=10, section="5.2.2", volume="运维服务分册")),
+      "《运维服务分册》p.10 5.2.2")
+check("无分册时不加书名号", str(Citation(page=7, section="三.(一)")), "p.7 三.(一)")
+
+_PK = {"pack_id": "t", "standard_doc": "测试", "formula_profile": "shandong_v1",
+       "rates": {"a": {"value": 20000, "citation": {"page": 1}},
+                 "b": {"value": 174, "citation": {"page": 1}}},
+       "regression": [{"id": "c1", "given": {
+           "expr": "a / b * 1.04", "inputs": {"a": "rates.a", "b": "rates.b"},
+           "digits": 2}, "expect": 119.54}]}
+r = run_regression(StandardPack(dict(_PK)))
+check("expr 形态回归可运行", (r[0]["actual"], r[0]["ok"]), (119.54, True))
+
+# inputs 写 dotted path 而不是数字 —— 抄一份就成了第二处真相
+_bad = {**_PK, "regression": [{"id": "c2", "given": {
+    "expr": "a + 1", "inputs": {"a": "rates.不存在"}}, "expect": 1}]}
+raises("inputs 指向不存在的路径要报错",
+       lambda: run_regression(StandardPack(dict(_bad))), PackError, "路径不存在")
+_bad2 = {**_PK, "regression": [{"id": "c3", "given": {"foo": 1}, "expect": 1}]}
+raises("未支持的 given 形态要报错",
+       lambda: run_regression(StandardPack(dict(_bad2))), PackError, "形态未支持")
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:
