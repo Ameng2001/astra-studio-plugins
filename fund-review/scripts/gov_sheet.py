@@ -100,8 +100,10 @@ TODO_MARKERS = ("待核价", "待核", "待补", "待查证", "待确认", "待�
 ENUM_LABELS: dict[str, str] = {
     # 产品成熟度
     "existing": "已有产品", "new": "全新开发", "partial": "部分复用",
-    # 违规级别
+    # 违规级别。`fail` 是冒烟矩阵在广东上炸出来的 —— 山东的一致性检查
+    # 只产 warn，广东因 D4/D8 not_in_scope 会产 fail。单跑一个省抓不到。
     "warn": "提示", "error": "错误", "info": "说明",
+    "fail": "否决", "pass": "通过", "ok": "通过", "skip": "跳过",
     # 是否
     "true": "是", "false": "否", "yes": "是", "no": "否",
     # 计价模型

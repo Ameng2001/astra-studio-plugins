@@ -89,6 +89,20 @@ defaults:                     # 交付形态，语法同上
 | 白 | 可修改：改这些格子做试算 |
 | 绿 | 自动计算，不得修改 |
 
+### 改完工具要跑端到端矩阵
+
+```bash
+BOM_PROJECT_ROOT=<项目目录> python3 <plugin>/tests/smoke.py
+```
+
+对**每个未退役的标准包**跑一遍 baseline_build → quote_generate →
+LibreOffice 重算 → parse_quote → run_optimize → run_review，
+断言的是**具体数字**不是退出码（那些静默出 0 的缺陷全都是退出码 0 的）。
+
+必须有第二个标准包 —— 只跑一个省等于什么都没验。实测它一上来就抓出
+「`fail` 枚举未登记」：山东的一致性检查只产 `warn`，广东因 D4/D8
+`not_in_scope` 会产 `fail`，单跑山东永远碰不到。
+
 ### 粒度：样例表合成一张的东西，我们必须分开
 
 `样例表` 只有一个子系统，所以它把项目级与子系统级参数合在一张 `项目特征` 里。

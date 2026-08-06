@@ -10,6 +10,12 @@ P0 合并单元格击穿 SUMIF 少算 ¥421.6 万；飞书删除只删一页留�
 
 跑法（无需 pytest）：
     PYTHONPATH=fund-review/scripts python3 fund-review/tests/test_guards.py
+
+**这里通过不等于工具是好的。** 本文件用合成数据测单元；这个项目的缺陷
+几乎全部只在真实输入上显形（见 `smoke.py` 头部的统计：11 个缺陷本文件
+抓到 0 个）。改完工具务必再跑一遍端到端矩阵：
+
+    BOM_PROJECT_ROOT=<项目目录> python3 fund-review/tests/smoke.py
 """
 from __future__ import annotations
 
