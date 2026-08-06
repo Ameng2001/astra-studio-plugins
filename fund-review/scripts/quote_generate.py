@@ -164,10 +164,14 @@ def emit_procurement_list(result: dict[str, Any], pack: StandardPack,
     hw = result["hardware"]
     if hw["rows"]:
         ws.append(["二、硬件设备购置费", "", hw["total"],
-                   f"{len(hw['rows'])} 项，按询价基线；{hw['quotes_required_count']} 项需三家询价",
+                   f"{len(hw['rows'])} 项，按询价基线；{hw['quotes_required_count']} 项需三家询价"
+                   + (f"；其中 {len(hw['pending'])} 项待询价/待选型，未计入金额"
+                      if hw.get("pending") else ""),
                    "三.(三) p.10-11"])
         for r in hw["rows"]:
-            ws.append(["", f"{r['name']}（{r['qty']}{r['unit']}）", r["amount"],
+            amount = "待询价" if r["amount"] is None else r["amount"]
+            qty = r["qty"] if r["qty"] is not None else "待定"
+            ws.append(["", f"{r['name']}（{qty}{r['unit']}）", amount,
                        r["pricing_basis"], ""])
 
     ws.append(["三、其他建设费用", "",

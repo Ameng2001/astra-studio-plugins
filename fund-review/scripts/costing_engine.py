@@ -284,7 +284,14 @@ class CostingEngine:
     # ---- 硬件 ----
 
     def hardware(self, items: list[BomItem]) -> dict[str, Any]:
+        """硬件购置费。
+
+        无单价的**列而不计**，与购置科目同一处理 —— `(price or 0) * qty`
+        会让一条待选型的 GPU 服务器悄悄贡献 ¥0，而清单上看不出它是
+        「没有这项」还是「价格没到位」。这两种状态在报表上必须能区分。
+        """
         rows, total = [], 0.0
+        pending: list[dict[str, Any]] = []
         for i in items:
             if i.cls != "HARDWARE":
                 continue
@@ -292,18 +299,25 @@ class CostingEngine:
             if ce is not None and "CE-HW" not in ce:
                 continue
             price = i.spec.get("reference_unit_price_yuan")
-            qty = i.spec.get("qty") or 0
-            amount = (price or 0) * qty
-            total += amount
+            qty = i.spec.get("qty")
+            amount = (price or 0) * (qty or 0)
+            if price is None or qty is None:
+                pending.append({"id": i.id, "name": i.name,
+                                "missing": [k for k, v in
+                                            (("单价", price), ("数量", qty)) if v is None],
+                                "note": i.spec.get("pricing_basis", "待询价")})
+            else:
+                total += amount
             rows.append({"id": i.id, "name": i.name, "qty": qty,
                          "unit": i.spec.get("unit", ""),
                          "reference_unit_price": price,
-                         "amount": xlround(amount, 2),
+                         "amount": xlround(amount, 2) if price is not None and qty is not None else None,
                          "pricing_basis": i.spec.get("pricing_basis", "")})
         ev = self.pack.data.get("procurement_evidence", {}).get("hardware", {})
         need_quote = [r for r in rows
                       if (r["reference_unit_price"] or 0) >= ev.get("unit_price_threshold", 1e18)]
         return {"rows": rows, "total": xlround(total, 2),
+                "pending": pending,
                 "quotes_required_count": len(need_quote),
                 "quotes_required_rule": (
                     f"单价 ≥{ev.get('unit_price_threshold')} 元或单一类型总价 "
