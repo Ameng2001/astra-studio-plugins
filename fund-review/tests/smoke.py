@@ -141,6 +141,11 @@ def find_delivery(root: Path) -> list[str]:
     modes = root / "delivery-modes/modes.yaml"
     if not modes.exists():
         return []
+    # 优先 deal.yaml（第三层决策的单一来源）；退回 delivery-plan.yaml 兼容旧项目。
+    # 找不到就只跑生成侧 —— 但覆盖缺口要 SKIPS 里说出来，不静默少验。
+    deal = next(iter(sorted((root / "deals").glob("*/deal.yaml"))), None)
+    if deal is not None:
+        return ["--deal", str(deal)]
     plan = next(iter(sorted((root / "deals").glob("*/delivery-plan.yaml"))), None)
     if plan is None:
         return []
@@ -182,6 +187,8 @@ def one_pack(pack_dir: Path, work: Path, quick: bool) -> None:
     # --- 2. 第三层：报价 ---
     print("  [2/5] quote_generate")
     deal = work / f"deal-{pid}"
+    # --deal 里带了 baseline，但冒烟要用自己刚建的那份（临时目录），
+    # 所以 --baseline 显式给 —— CLI 覆盖文件正是为这种场景设计的。
     p = run([str(SCRIPTS / "quote_generate.py"), "--baseline", str(bl_dir),
              "--out", str(deal), "--deal-id", f"冒烟-{pid}",
              "--doc-prefix", "冒烟", "--doc-date", "20260101",

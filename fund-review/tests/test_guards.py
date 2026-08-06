@@ -709,6 +709,49 @@ check("无 deal 文件时 reproduce 仍可跑（给 --baseline 路径）",
 
 
 
+# --- 内联 delivery 与 scope ---
+from delivery_matrix import DeliveryPlan as _DP
+
+_MODES = {"modes": {"D1": {"construction": ["CE-DEV"]}}, "cost_elements": {},
+          "rules": [{"id": "R-7", "severity": "warn"}]}
+_it = BomItem(id="FP.A.0001", cls="SOFTWARE_FP", name="x",
+              path=Path_(product_line="P", system="生态运营与交易中台"),
+              description="支持某功能，描述够长以通过门禁。",
+              nesma=Nesma(type="EI"), since="0.1.0")
+_it2 = BomItem(id="FP.B.0001", cls="SOFTWARE_FP", name="y",
+               path=Path_(product_line="P", system="数智底座-平台能力"),
+               description="支持某功能，描述够长以通过门禁。",
+               nesma=Nesma(type="EI"), since="0.1.0")
+
+_pl = _DP(_MODES, {"name": "内联方案", "defaults": [{"match": {}, "mode": "D1"}]})
+check("内联 plan 能取到方案名", _pl.name, "内联方案")
+check("无 scope 块 = 全量", _pl.in_scope(_it)[0], True)
+
+# scope 排除 —— 原因写人话，不写 dict 的 repr
+_pl2 = _DP(_MODES, {"scope": {"exclude": [
+    {"system": "生态运营与交易中台", "reason": "二期建设，本次不含"}]}})
+ok, why = _pl2.in_scope(_it)
+check("scope 能排除子系统", ok, False)
+check("排除原因用 reason 原文，不是 dict repr", why, "二期建设，本次不含")
+check("未被排除的仍在范围内", _pl2.in_scope(_it2)[0], True)
+# 没写 reason 时也要是人话
+_pl3 = _DP(_MODES, {"scope": {"exclude": [{"system": "生态运营与交易中台"}]}})
+check("无 reason 时渲染成人话", _pl3.in_scope(_it)[1], "子系统「生态运营与交易中台」")
+
+# match 里拼错的键要报错 —— 静默匹配不上看起来像「范围没生效」
+_pl4 = _DP(_MODES, {"scope": {"exclude": [{"systemm": "x"}]}})
+raises("match 拼错的键要报错", lambda: _pl4.in_scope(_it), ValueError, "未知键")
+
+# deal.yaml 里 delivery 与 delivery_plan 不能同时给
+with tempfile.TemporaryDirectory() as _td2:
+    _q = Path(_td2) / "d.yaml"
+    _q.write_text("deal_id: x\ndelivery: {defaults: []}\ndelivery_plan: p.yaml\n",
+                  encoding="utf-8")
+    raises("内联与指向文件二选一", lambda: qg.load_deal_file(_q),
+           SystemExit, "只能有一个")
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:

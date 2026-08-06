@@ -161,6 +161,12 @@ def load_deal_file(path: Path) -> tuple[dict[str, Any], str]:
     import yaml as _yaml
     raw = path.read_bytes()
     doc = _yaml.safe_load(raw.decode("utf-8")) or {}
+    if doc.get("delivery") and doc.get("delivery_plan"):
+        raise SystemExit(
+            f"{path}：`delivery:`（内联）与 `delivery_plan:`（指向文件）"
+            f"只能有一个。\n"
+            f"  两个都给，读的人分不出哪个生效 —— 而它们决定的是"
+            f"本层最大的杠杆（形态指派）。")
     unknown = set(doc) - set(DEAL_FILE_KEYS) - {"scope", "delivery", "doc", "note"}
     if unknown:
         raise SystemExit(
@@ -1184,6 +1190,13 @@ def main() -> None:
 
     # 模式库：按名字挑，而不是每个商机手写 delivery-plan
     plan_path = args.delivery_plan
+    # deal.yaml 里内联的 delivery —— 少一个文件，且它的内容自动进 deal.yaml
+    # 的哈希，不必再单独哈希一份方案文件。
+    inline_plan = deal_doc.get("delivery")
+    if inline_plan is not None and "scope" in deal_doc:
+        # scope 与形态共用 match 语法，放在 delivery 块里最自然；
+        # 但写在顶层也接受 —— 合并时顶层的 scope 归入 plan。
+        inline_plan = {**inline_plan, "scope": deal_doc["scope"]}
     if args.mode:
         cands = sorted(args.mode_lib.glob("*.yaml"))
         import yaml as _yaml
@@ -1197,12 +1210,13 @@ def main() -> None:
     dplan = None
     violations: list[Any] = []
     scope_excluded: dict[str, Any] = {}
-    if plan_path and args.modes:
+    if (plan_path or inline_plan) and args.modes:
         import yaml as _yaml
         modes_doc = _yaml.safe_load(args.modes.read_text(encoding="utf-8"))
         internal = (_yaml.safe_load(args.internal_cost.read_text(encoding="utf-8"))
                     if args.internal_cost else {})
-        dplan = DeliveryPlan.load(args.modes, plan_path)
+        dplan = (DeliveryPlan(modes_doc, inline_plan) if inline_plan is not None
+                 else DeliveryPlan.load(args.modes, plan_path))
         # 范围先于形态：范围外的条目连形态都不该指派
         deal.scope_filter = dplan.in_scope
         base_items, scope_excluded = CostingEngine(bom, pack, deal).in_scope()

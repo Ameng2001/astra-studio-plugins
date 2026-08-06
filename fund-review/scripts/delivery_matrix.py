@@ -75,7 +75,7 @@ class DeliveryPlan:
         inc, exc = sc.get("include") or [], sc.get("exclude") or []
         for c in exc:
             if self._match(item, c):
-                return False, f"被 exclude 规则排除：{c}"
+                return False, self._cond_text(c)
         if not inc:
             return True, ""
         for c in inc:
@@ -84,7 +84,35 @@ class DeliveryPlan:
         return False, "不在 include 规则内"
 
     @staticmethod
+    def _cond_text(cond: dict[str, Any]) -> str:
+        """把 match 条件写成人话。
+
+        直接插 dict 会把 Python 的 repr 印进清单 ——
+        `{'system': '生态运营与交易中台'}` 这种东西出现在报财评的表里，
+        与 `gov_sheet` 拦容器进单元格防的是同一件事；它嵌在字符串里
+        才躲过了那道检查。附带的 `reason` 优先用，那是人写的话。
+        """
+        if cond.get("reason"):
+            return str(cond["reason"])
+        LABEL = {"system": "子系统", "cls": "类别",
+                 "product_line": "产品线", "tag": "标记"}
+        parts = [f"{LABEL.get(k, k)}「{v}」"
+                 for k, v in cond.items() if k != "reason"]
+        return "、".join(parts) or "（未写明条件）"
+
+    #: `match` 条件里允许出现、但不参与匹配的注释性键。
+    #: 没有它，写了 `reason:` 的条件会因为多一个键而永远匹配不上 ——
+    #: 而症状是「范围没生效」，不是报错。
+    _MATCH_META = {"reason", "note"}
+
+    @staticmethod
     def _match(item: BomItem, cond: dict[str, Any]) -> bool:
+        unknown = set(cond) - {"cls", "system", "product_line", "tag"} - DeliveryPlan._MATCH_META
+        if unknown:
+            raise ValueError(
+                f"match 条件含未知键 {sorted(unknown)}；"
+                f"可用：cls / system / product_line / tag（reason / note 为注释）。"
+                f"\n  拼错的键会让条件永远匹配不上，而那看起来像「范围没生效」。")
         if "cls" in cond and item.cls != cond["cls"]:
             return False
         if "system" in cond and item.path.system != cond["system"]:

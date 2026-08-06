@@ -41,6 +41,33 @@ CLI 参数 / 两个因子文件 / 一个从没启用的 scope_filter），
 `deal.lock.json` 现在记 `deal.yaml` 的**内容哈希**（不是路径）——
 改了文件而路径不变，只记路径的 lock 会悄悄失效。
 
+### 交付形态内联，范围与它共用语法
+
+```yaml
+delivery:                       # 内联，不再单独一个 delivery-plan.yaml
+  name: 全私有化
+  defaults:
+    - match: {product_line: 采购科目, cls: MODEL}
+      mode: D4
+    - match: {cls: HARDWARE}
+      mode: D7
+
+scope:                          # 与形态共用 match 语法，选择单元是子系统
+  exclude:
+    - system: 生态运营与交易中台
+      reason: 二期建设，本次不含    # ← 写人话，会原样进清单
+```
+
+内联的好处是它的内容自动进 `deal.yaml` 的哈希，不必再单独哈希一份方案文件。
+`delivery:` 与 `delivery_plan:` **只能给一个** —— 两个都给，读的人分不出
+哪个生效，而它们决定的是本层最大的杠杆。
+
+`scope` 排除的条目走「列而不计」：清单末节列出、编制说明里说明，
+**不是消失** —— 财评看到整段没有会认为方案漏项。实测排除一个子系统：
+158 条、建设期 −¥864,682.60，清单里印的是
+
+    范围外：二期建设，本次不含：不计入，158 条
+
 ---
 
 ```bash
