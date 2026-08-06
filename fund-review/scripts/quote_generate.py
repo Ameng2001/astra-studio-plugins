@@ -620,8 +620,42 @@ def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
                t["construction_total"], t["construction_total"],
                where="[04_三层试算] 建设期合计", rel_tol=0.0001)},
           cell_roles={"本次在范围内": "calc"})
-    s.note(f"　送审值（00_测算汇总 / Z00）建设期合计：¥{t['construction_total']:,.2f}。"
-           f"未改任何白格时本表应与之相等。")
+    # ---- 试算后的 Z00 构成 ----
+    # 为什么不做跨册外链：文件名带 `v0.18.0_20260806`，**每次重跑都变** ——
+    # `='[…_Z02_…_v0.18.0_20260806.xlsx]04_三层试算'!G25` 下个版本必断。
+    # 而且送审是分册递交，评审可能只拿到 Z00 一册，带外链的册单独打开是 #REF!。
+    # 更要紧的是：让试算传播到 Z00，就制造了一份**看起来像送审值但不是**的总表，
+    # 那正是这套工具处处在防的。
+    # 所以改为：把「试算后总表会变成什么样」在本表内算出来，并标明它不是送审值。
+    s.blank()
+    s.note("　【试算后的总报价构成】对应 Z00 的六大类。"
+           "**这是试算结果，不是送审值** —— 送审值在 Z00 与 00_测算汇总。")
+    z0_first = s._next
+    Z0 = [("软件开发费（定制）", f"={col}{sum_row}", t["software_dev"]),
+          ("软件产品购置费", None, t["software_purchase"]),
+          ("数据资源和服务购置费", None, t["data_purchase"]),
+          ("硬件设备购置费", None, t["hardware_purchase"]),
+          ("实施费用", None, t.get("implementation", 0.0)),
+          ("其他建设费用", f"=SUM({col}{d_first}:{col}{d_last})", t["other_fees"])]
+    for label, expr, val in Z0:
+        s.row({"子系统": f"　{label}", "本次在范围内": "自动",
+               "计入建设期（元）": (gov_sheet.formula(expr, val, val,
+                                                     where=f"[04_三层试算] {label}")
+                                    if expr else val)},
+              cell_roles={"本次在范围内": "calc"})
+    z0_last = s._next - 1
+    s.row({"子系统": "　**试算后建设期合计**", "本次在范围内": "自动",
+           "计入建设期（元）": gov_sheet.formula(
+               f"=SUM({col}{z0_first}:{col}{z0_last})",
+               t["construction_total"], t["construction_total"],
+               where="[04_三层试算] 试算后建设期合计", rel_tol=0.0001)},
+          cell_roles={"本次在范围内": "calc"})
+    s.note(f"　送审值（Z00 / 00_测算汇总）建设期合计：¥{t['construction_total']:,.2f}。"
+           f"未改任何浅黄格时上面两个合计都应等于它。")
+    s.note("　⚠ **Z00–Z04 之间没有跨册公式链接**，这是刻意的：送审文件名带版本号"
+           "与日期，每次重跑都变，外链下个版本必断；且分册递交时，"
+           "带外链的册单独打开会是 #REF!。**范围定下来要改 deal.yaml 重跑** ——"
+           "重跑后五册一起更新，这比外链可靠。")
     s.note("　试算用法：把某个子系统的「本次在范围内」改成「否」→ 该行不计、"
            "其他费用按新基数重算、合计即时更新。")
     s.note("　⚠ 被排除的子系统在正式清单里走「**列而不计**」—— 末节列出并"
