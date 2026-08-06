@@ -9,9 +9,15 @@
     → 类别 → UFP(自动) → 应用类型 → 重用程度 → 修改类型 → US(自动)
     → 备注 → 条目ID
 
-    US = UFP × 规模变更因子 × 重用系数 × 修改类型系数 × 应用类型系数，
+    US = ROUND(UFP × 规模变更因子 × 重用系数 × 修改类型系数 × 应用类型系数, 2)，
     与引擎 `adjusted_fp` 口径对齐。**应用类型不能漏** —— AI 类子系统
     因子 1.5、业务处理 1.0，漏了会把 5 个 AI 子系统整体少算三分之一。
+
+**一个 Base 对应一个标准包。** BOM 本体是区域中立的（存 `app_type: 智能信息`
+这样的分类名，不存 1.5），但计算书要算出 US 就必须落到某个省。而换省不是
+改参数表数字的事：广东 2018 分册没有规模变更因子这一环、应用类型是 4 类
+（智能信息在广东叫「人工智能」）、没有开发类别系数 —— **US 是公式结构不同**。
+所以配置带 `pack_id`，push 前与参数表的「元信息/标准包」行比对，不一致就拒写。
 
 **一个 Base、每个子系统一张表**，外加一张「0 参数表」存权重与系数。
 UFP/US 是跨表引用参数表的公式字段 —— 改系数只改参数表一处，15 张表联动。
@@ -92,8 +98,37 @@ def _row(it: BomItem) -> dict[str, Any]:
 # ---- push --------------------------------------------------------------
 
 
+def check_pack(cfg: dict[str, Any]) -> str | None:
+    """校验配置声明的标准包与飞书参数表里记的是不是同一个。
+
+    这张表的 US 公式带规模变更因子 —— 那是**山东的公式结构**，广东 2018
+    分册根本没有这一环，应用类型词表也不同（智能信息 vs 人工智能）。
+    拿山东的 Base 推广东的活不会报任何错，只会静默算错一个数量级都不到、
+    却足以让整份报价站不住的差额。所以宁可在 push 前挡住。
+
+    参数表用一行 `参数类别=元信息 / 参数名=标准包` 记口径，
+    pack id 写在「依据」列的 `|` 之前。
+    """
+    want = cfg.get("pack_id")
+    if not want:
+        return None                     # 未声明就不管 —— 老配置向后兼容
+    for r in fetch(cfg["base_token"], cfg["param_table"]):
+        if r.get("参数类别") == "元信息" and r.get("参数名") == "标准包":
+            got = r.get("依据", "").split("|")[0].strip()
+            if got != want:
+                return (f"标准包不一致：配置声明 {want}，飞书参数表记的是 {got}。"
+                        f"换省不是改参数表的数字 —— US 的公式结构本身不同，"
+                        f"须另建一个 Base。")
+            return None
+    return (f"配置声明 pack_id={want}，但参数表里没有「元信息/标准包」行 —— "
+            f"无法确认这个 Base 是哪个标准口径，拒绝写入。")
+
+
 def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
     """按子系统分表覆盖写入。参数表不动 —— 它是人维护的。"""
+    err = check_pack(cfg)
+    if err:
+        return {"ok": False, "written": 0, "error": err}
     bt = cfg["base_token"]
     by_system: dict[str, list[BomItem]] = defaultdict(list)
     for i in bom.active():
