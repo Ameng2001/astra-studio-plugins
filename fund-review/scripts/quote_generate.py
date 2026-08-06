@@ -1285,7 +1285,7 @@ def emit_tco(comparisons: list[dict], path: Path,
     gaps = [g for c in comparisons for g in c.get("gaps", [])]
     if gaps:
         g = gov_sheet.GovSheet(
-            wb, "03_逐子系统对比" if False else "02_待核价与缺口", title="待核价与缺口",
+            wb, "03_待核价与缺口", title="待核价与缺口",
             subtitle="以下项目未计入上表金额，出正式报价前须补齐",
             columns=[gov_sheet.Col("方案", width=22),
                      gov_sheet.Col("类型", width=12),
