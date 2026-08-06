@@ -259,6 +259,65 @@ raises("单选写不存在的选项",
        lark_table.LarkTableError, "没有这些选项")
 
 
+# ---- 9. 报价表结构守卫（quote_shape）-----------------------------------
+# 同一个 bug 家族在 run_optimize / run_review 里出现过**五次**：认不出列名、
+# 认不出 kind，然后静默返回 0 / 跳过整行。全都不报错，报告印出 0/100，
+# 读的人只会以为报价烂透了。收敛到 quote_shape 后，这一组钉住它。
+
+import quote_shape as qs
+
+# kind 门控必须是**排除法** —— 白名单会把 unknown 一律排除，
+# 而 unknown 恰恰是最常见的情况（实测真实报价整簿判为 unknown）
+check("kind=unknown 参与检查", qs.is_priceable("unknown"), True)
+check("kind=None 参与检查", qs.is_priceable(None), True)
+check("kind=platform 参与检查", qs.is_priceable("platform"), True)
+check("standard 不参与", qs.is_priceable("standard"), False)
+check("summary sheet 不参与", qs.is_priceable("unknown", "summary"), False)
+
+rs = qs.Resolver()
+CELLS_A = {"人天": 200, "报价": 200000, "功能描述": "测试功能"}
+rs.observe(CELLS_A)
+check("按角色取人天", rs.get(CELLS_A, "person_days"), 200)
+check("按角色取总额", rs.get(CELLS_A, "total"), 200000)
+check("描述可取非数值", rs.get(CELLS_A, "detail", numeric=False), "测试功能")
+check("无显式单价列时由总额÷人天推出", rs.derive_unit_price(CELLS_A), 1000.0)
+
+rs2 = qs.Resolver()
+CELLS_B = {"人/天": 10, "成本单价": 1500}
+rs2.observe(CELLS_B)
+check("有显式单价列时直接取", rs2.derive_unit_price(CELLS_B), 1500.0)
+
+raises("未知语义角色要报错",
+       lambda: qs.Resolver().get({}, "不存在的角色"), KeyError, "未知语义角色")
+
+# 整表零命中 = 表结构没认出来 → 硬失败
+rs3 = qs.Resolver()
+for c in ({"莫名其妙的列": 1}, {"另一个怪列": 2}):
+    rs3.observe(c); rs3.get(c, "total")
+raises("金额角色全表零命中要硬失败",
+       lambda: rs3.assert_recognized("total"), qs.QuoteShapeError, "零命中")
+try:
+    rs3.assert_recognized("total")
+except qs.QuoteShapeError as e:
+    check("报错要列出实际列名", "莫名其妙的列" in str(e), True)
+    check("报错要给修法", "COLUMN_ROLES" in str(e), True)
+
+# 命中过就不该报错；派生命中也算
+rs4 = qs.Resolver(); rs4.observe(CELLS_A); rs4.derive_unit_price(CELLS_A)
+rs4.assert_recognized("unit_price")           # 由 total÷person_days 派生，不该炸
+
+# 迭代器把 kind 门控收在一处
+QUOTE = {"workbooks": [
+    {"path": "a.xlsx", "kind": "unknown", "sheets": [
+        {"name": "s1", "kind": "items", "rows": [{"row_index": 1, "cells": CELLS_A}]},
+        {"name": "s2", "kind": "summary", "rows": [{"row_index": 1, "cells": CELLS_A}]}]},
+    {"path": "std.pdf", "kind": "standard", "sheets": [
+        {"name": "x", "kind": "items", "rows": [{"row_index": 1, "cells": CELLS_A}]}]},
+]}
+got = [(sh["name"]) for _wb, sh, _r in qs.iter_priceable_rows(QUOTE)]
+check("迭代器排除 summary 与 standard，保留 unknown", got, ["s1"])
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:

@@ -12,6 +12,8 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+import quote_shape
+
 from formula_engine import check_per_day_rate, recommend_per_day_rate, check_reserve_fee_rate
 from derive_fp import classify_fp_row, derive_fp_from_person_days, fp_to_cost_range
 from expert_reviewer import enhance_challenge
@@ -36,27 +38,10 @@ SECTION_TITLES = {
 }
 
 
-#: 单价与总额的候选列名。**认不出不是「合格」，是「没检查」** ——
-#: 这个脚本此前连续三处栽在同一个形状上：金额列认不出返回 0、
-#: wb_kind=unknown 整条链跳过、单价列认不出逐行跳过。
-#: 都不报错，都给出「一切正常」的假象。
-UNIT_PRICE_COLUMNS = ["成本单价", "单价（元）", "单价", "对外单价", "人天单价"]
-TOTAL_COLUMNS = ["成本总价", "对外总价", "成本总价（元）", "对外总价（元）",
-                 "研发报价", "报价", "总价", "总价（元）", "金额", "金额（元）"]
-
-
 def review_row(wb_kind: str, sheet_name: str, sheet_kind: str, row_cells: dict) -> list[dict]:
     """Return a list of finding dicts for this single quote row."""
     findings = []
-    detail = (
-        row_cells.get("建设详情")
-        or row_cells.get("详情")
-        or row_cells.get("建设详情（定位）")
-        or row_cells.get("建设内容")
-        or row_cells.get("分项名称")
-        or row_cells.get("名称")
-        or ""
-    )
+    detail = quote_shape.Resolver().get(row_cells, "detail", numeric=False) or ""
     # If a previous rewrite stashed the pre-semantic-split text, prefer it for classification.
     # Reason: semantic-split removes AI keywords from platform rows for narrative cleanup,
     # but the row's substantive nature didn't change. Reviewers classify on substance, not on
@@ -64,26 +49,18 @@ def review_row(wb_kind: str, sheet_name: str, sheet_kind: str, row_cells: dict) 
     orig = row_cells.get("_orig_detail")
     if orig:
         detail = orig
-    person_days = row_cells.get("人/天") or row_cells.get("人天")
-    unit_price = next(
-        (row_cells[c] for c in UNIT_PRICE_COLUMNS
-         if isinstance(row_cells.get(c), (int, float))), None)
-    if unit_price is None and isinstance(person_days, (int, float)) and person_days > 0:
-        # 很多报价表没有显式单价列，只有「人天 + 报价(总额)」——
-        # 单价是隐含的（如本例总表注明 1,000 元/人天）。
-        # 认不出单价就跳过整行，等于「认不出的行一律判合格」。
-        total = next((row_cells[c] for c in TOTAL_COLUMNS
-                      if isinstance(row_cells.get(c), (int, float))), None)
-        if total:
-            unit_price = round(total / person_days, 2)
+    _rs = quote_shape.Resolver()
+    person_days = _rs.get(row_cells, "person_days")
+    unit_price = _rs.derive_unit_price(row_cells)
 
     # Check 1: 软件类报价 → 单价 vs 标准带
     # `wb_kind` 由 parse_quote 按文件名/表头猜，猜不出就是 "unknown"。
     # 把 unknown 排除在检查之外，等于「认不出的报价一律判为合格」——
     # 实测一份 1215 行的真实报价因此得到 0 findings / 0 分而命令正常退出。
     # 改为：只排除**明确不是报价**的 kind，其余都查。
-    softwarish = wb_kind not in {"standard", "guideline"}
-    if softwarish and sheet_kind != "summary" and isinstance(unit_price, (int, float)) and isinstance(person_days, (int, float)) and person_days > 0:
+    if (quote_shape.is_priceable(wb_kind, sheet_kind)
+            and isinstance(unit_price, (int, float))
+            and isinstance(person_days, (int, float)) and person_days > 0):
         category, reuse = classify_fp_row(str(detail), sheet_name, wb_kind)
         verdict = check_per_day_rate(unit_price, category, reuse)
         floor, ceiling = recommend_per_day_rate(category, reuse)
@@ -241,29 +218,27 @@ def main(session_dir: str, target: str = "original") -> None:
     counts = {"pass": 0, "warn": 0, "fail": 0}
     ref_index: dict[tuple[str, int], int] = defaultdict(int)
 
-    for wb in quote["workbooks"]:
-        for sh in wb["sheets"]:
-            if sh["kind"] == "summary":
-                continue
-            for row in sh["rows"]:
-                fs = review_row(wb["kind"], sh["name"], sh["kind"], row["cells"])
-                for f in fs:
-                    counts[f["severity"]] += 1
-                    # Enhance challenge via expert_reviewer (LLM or template)
-                    if f["severity"] in ("warn", "fail"):
-                        expert = enhance_challenge(f)
-                        f["challenge"] = expert["challenge_text"] or f.get("challenge", "")
-                        f["remediation"] = expert.get("remediation", "")
-                        f["expert_source"] = expert.get("source", "")
-                    # Group by primary section
-                    primary = f["refs"][0]["section"] if f["refs"] else "其他"
-                    findings_by_section[primary].append({
-                        **f,
-                        "loc": {"workbook": Path(wb["path"]).name, "sheet": sh["name"], "row": row["row_index"]},
-                        "detail_excerpt": (str(row["cells"].get("建设详情") or row["cells"].get("详情") or row["cells"].get("建设内容") or row["cells"].get("分项名称") or "")[:80]),
-                    })
-                    for r in f["refs"]:
-                        ref_index[(r["section"], r["page"])] += 1
+    shape = quote_shape.Resolver()
+    for wb, sh, row in quote_shape.iter_priceable_rows(quote):
+            shape.observe(row["cells"])
+            fs = review_row(wb["kind"], sh["name"], sh["kind"], row["cells"])
+            for f in fs:
+                counts[f["severity"]] += 1
+                # Enhance challenge via expert_reviewer (LLM or template)
+                if f["severity"] in ("warn", "fail"):
+                    expert = enhance_challenge(f)
+                    f["challenge"] = expert["challenge_text"] or f.get("challenge", "")
+                    f["remediation"] = expert.get("remediation", "")
+                    f["expert_source"] = expert.get("source", "")
+                # Group by primary section
+                primary = f["refs"][0]["section"] if f["refs"] else "其他"
+                findings_by_section[primary].append({
+                    **f,
+                    "loc": {"workbook": Path(wb["path"]).name, "sheet": sh["name"], "row": row["row_index"]},
+                    "detail_excerpt": (str(row["cells"].get("建设详情") or row["cells"].get("详情") or row["cells"].get("建设内容") or row["cells"].get("分项名称") or "")[:80]),
+                })
+                for r in f["refs"]:
+                    ref_index[(r["section"], r["page"])] += 1
 
     total = sum(counts.values()) or 1
     # weighted compliance: pass=1, warn=0.5, fail=0

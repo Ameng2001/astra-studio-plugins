@@ -15,6 +15,7 @@ from pathlib import Path
 
 import openpyxl
 
+import quote_shape
 import scan_subject
 import scan_labor
 import scan_semantic
@@ -55,40 +56,16 @@ def _band_pct() -> float:
 
 
 
-#: 金额列的候选名。**认不出就报错，不静默返回 0** ——
-#: 这是 P0 那类失败的同族：依赖具体表头，换一份报价表就全落空，
-#: 而 0 会被当成「这份报价没有金额」而不是「我没认出金额列」。
-PRICE_COLUMNS = ["成本总价", "对外总价", "成本总价（元）", "对外总价（元）",
-                 "研发报价", "报价", "总价", "总价（元）", "金额", "金额（元）"]
-
-
-class QuoteShapeError(RuntimeError):
-    """报价表结构与预期不符 —— 硬失败，不静默出 0。"""
-
-
 def compute_original_total(quote: dict) -> float:
+    """报价原总额。认不出金额列时**硬失败**，见 quote_shape 模块头。"""
+    rs = quote_shape.Resolver()
     total = 0.0
-    hit = 0
-    seen_cols: set[str] = set()
-    for wb in quote["workbooks"]:
-        for sh in wb["sheets"]:
-            if sh["kind"] == "summary":
-                continue
-            for row in sh["rows"]:
-                seen_cols |= set(row["cells"])
-                for c in PRICE_COLUMNS:
-                    v = row["cells"].get(c)
-                    if isinstance(v, (int, float)):
-                        total += v
-                        hit += 1
-                        break
-    if hit == 0:
-        raise QuoteShapeError(
-            "未在报价表里认出任何金额列 —— 预算带无从计算。\n"
-            f"  期望其一：{PRICE_COLUMNS}\n"
-            f"  实际列名：{sorted(seen_cols)[:25]}\n"
-            "  请把本表的金额列名加进 run_optimize.PRICE_COLUMNS。"
-            "静默返回 0 会让 ±5% 预算带变成对 0 取带，毫无意义。")
+    for _wb, _sh, row in quote_shape.iter_priceable_rows(quote):
+        rs.observe(row["cells"])
+        v = rs.get(row["cells"], "total")
+        if v is not None:
+            total += v
+    rs.assert_recognized("total")
     return round(total, 2)
 
 
@@ -184,47 +161,33 @@ def build_fp_table(quote: dict, out_xlsx: str) -> dict:
     seq = 0
     by_cat: dict[str, int] = {}
     sum_min, sum_max = 0.0, 0.0
-    skipped_wb: dict[str, int] = {}
-    skipped_sh: dict[str, int] = {}
-    for wb in quote["workbooks"]:
-        # kind 由 parse_quote 按文件名/表头猜；猜成 unknown 时**不能当成
-        # 「这份报价没有功能点」** —— 那正是本表落空的原因（kind=unknown）。
-        # 放宽到「非 summary 即处理」，并把跳过的记下来供诊断。
-        if wb["kind"] in {"standard", "guideline"}:
-            skipped_wb[wb["kind"]] = skipped_wb.get(wb["kind"], 0) + 1
+    rs = quote_shape.Resolver()
+    for wb, sh, row in quote_shape.iter_priceable_rows(quote):
+        # 语义角色取值 + kind 排除法都收在 quote_shape ——
+        # 此前这里用 wb.kind ∈ {platform,llm} 的白名单，kind=unknown 全被排除，
+        # 而那正是最常见的情况：实测一份真实报价整簿 unknown，反推 FP 归零。
+        rs.observe(row["cells"])
+        person_days = rs.get(row["cells"], "person_days")
+        if not isinstance(person_days, (int, float)) or person_days <= 0:
             continue
-        for sh in wb["sheets"]:
-            if sh["kind"] == "summary":
-                skipped_sh[sh["kind"]] = skipped_sh.get(sh["kind"], 0) + 1
-                continue
-            for row in sh["rows"]:
-                person_days = row["cells"].get("人/天") or row["cells"].get("人天")
-                if not isinstance(person_days, (int, float)) or person_days <= 0:
-                    continue
-                detail = (
-                    row["cells"].get("建设详情")
-                    or row["cells"].get("详情")
-                    or row["cells"].get("建设详情（定位）")
-                    or row["cells"].get("建设内容")
-                    or ""
-                )
-                category, reuse = classify_fp_row(str(detail), sh["name"], wb["kind"])
-                fp = derive_fp_from_person_days(person_days)
-                lo, hi = fp_to_cost_range(fp, category, reuse)
-                seq += 1
-                by_cat[category] = by_cat.get(category, 0) + fp
-                sum_min += lo
-                sum_max += hi
-                nesma = nesma_classify(str(detail), fp)
-                ws.append([
-                    seq, Path(wb["path"]).name, sh["name"], row["row_index"],
-                    str(detail)[:200],
-                    person_days, fp,
-                    nesma["summary"],
-                    nesma["ILF"], nesma["EIF"], nesma["EI"], nesma["EO"], nesma["EQ"],
-                    category, reuse,
-                    round(lo), round(hi), round((lo + hi) / 2),
-                ])
+        detail = rs.get(row["cells"], "detail", numeric=False) or ""
+        category, reuse = classify_fp_row(str(detail), sh["name"], wb["kind"])
+        fp = derive_fp_from_person_days(person_days)
+        lo, hi = fp_to_cost_range(fp, category, reuse)
+        seq += 1
+        by_cat[category] = by_cat.get(category, 0) + fp
+        sum_min += lo
+        sum_max += hi
+        nesma = nesma_classify(str(detail), fp)
+        ws.append([
+            seq, Path(wb["path"]).name, sh["name"], row["row_index"],
+            str(detail)[:200],
+            person_days, fp,
+            nesma["summary"],
+            nesma["ILF"], nesma["EIF"], nesma["EI"], nesma["EO"], nesma["EQ"],
+            category, reuse,
+            round(lo), round(hi), round((lo + hi) / 2),
+        ])
     ws.append([])
     ws.append([None, None, None, None, "合计", None, sum(by_cat.values()),
                None, None, None, None, None, None,
