@@ -190,16 +190,22 @@ def main() -> None:
 
     p2 = sub.add_parser("validate")
     p2.add_argument("--pack", required=True, type=Path)
+    p2.add_argument("--allow-deprecated-pack", action="store_true",
+                    help="允许加载已退役的标准包 —— 仅用于历史报价复算")
     p2.add_argument("--verify-citations", action="store_true")
 
     p4 = sub.add_parser("compare", help="同一 BOM 跨区域对比，逐因子分解差异")
     p4.add_argument("--packs", required=True, nargs=2, type=Path)
+    p4.add_argument("--allow-deprecated-pack", action="store_true",
+                    help="允许加载已退役的标准包 —— 仅用于历史报价复算")
     p4.add_argument("--bom", required=True, type=Path)
     p4.add_argument("--modes", type=Path)
     p4.add_argument("--delivery-plan", type=Path)
 
     p3 = sub.add_parser("replay")
     p3.add_argument("--pack", required=True, type=Path)
+    p3.add_argument("--allow-deprecated-pack", action="store_true",
+                    help="允许加载已退役的标准包 —— 仅用于历史报价复算")
     p3.add_argument("--workbook", required=True, type=Path)
 
     args = ap.parse_args()
@@ -224,7 +230,7 @@ def main() -> None:
         sys.exit(0 if abs(r["residual_pct"]) < 0.5 and r["ufp_equal"] else 1)
 
     try:
-        pack = StandardPack.load(args.pack)
+        pack = StandardPack.load(args.pack, allow_deprecated=args.allow_deprecated_pack)
     except PackError as e:
         print(f"标准包校验失败：\n{e}", file=sys.stderr)
         sys.exit(2)

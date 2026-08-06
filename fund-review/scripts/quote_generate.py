@@ -442,10 +442,12 @@ def main() -> None:
                     help="用于 TCO 对比的场景预设")
     ap.add_argument("--publish-lark", metavar="FOLDER_TOKEN",
                     help="把生成的 xlsx 导入飞书文件夹供在线查看（快照，非维护对象）")
+    ap.add_argument("--allow-deprecated-pack", action="store_true",
+                    help="允许加载已退役的标准包 —— 仅用于历史报价复算")
     args = ap.parse_args()
 
     bom = Bom.load(args.bom)
-    pack = StandardPack.load(args.pack)
+    pack = StandardPack.load(args.pack, allow_deprecated=args.allow_deprecated_pack)
     deal = DealConfig(deal_id=args.deal_id, project_type=args.project_type,
                       reuse_level=args.reuse_level,
                       include_placeholders=args.include_placeholders,

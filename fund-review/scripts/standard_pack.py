@@ -51,12 +51,32 @@ class StandardPack:
     # ---- 加载与校验 ----
 
     @classmethod
-    def load(cls, path: Path) -> "StandardPack":
+    def load(cls, path: Path, allow_deprecated: bool = False) -> "StandardPack":
+        """加载标准包。已退役的包默认拒绝加载。
+
+        退役的包**不删文件** —— 历史报价的 deal.lock.json 锁着它的 pack_id，
+        删了历史就复算不出来了。但也不能让它被随手用于新报价：
+        广东那个旧包只有软件开发一册，四个科目被判成 not_in_scope，
+        拿它出新报价等于把「我们没读到」说成「广东不允许」。
+
+        所以是「保留 + 拒用」：默认报错并指向继任者，历史复算显式传
+        `allow_deprecated=True` 放行。光在 yaml 里写一句 deprecated 没有用 ——
+        没人会去读那一句。
+        """
         path = Path(path)
         p = path / "pack.yaml" if path.is_dir() else path
         data = yaml.safe_load(p.read_text(encoding="utf-8"))
+        dep = data.get("deprecated")
+        if dep and not allow_deprecated:
+            raise PackError(
+                f"{data.get('pack_id')} 已于 {dep.get('since')} 退役，"
+                f"请改用 {dep.get('superseded_by')}。\n"
+                f"  退役原因：{str(dep.get('reason', '')).strip().splitlines()[0]}\n"
+                f"  仍适用于：{'；'.join(dep.get('still_valid_for') or [])}\n"
+                f"  历史复算请显式传 allow_deprecated=True / --allow-deprecated-pack")
         pack = cls(data, p.parent)
         pack.validate()
+        pack.deprecated = dep
         return pack
 
     def validate(self) -> None:

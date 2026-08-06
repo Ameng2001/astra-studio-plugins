@@ -43,13 +43,14 @@ class Finding:
 
 class SelfReview:
     def __init__(self, deal: Path, bom_dir: Path, pack_dir: Path,
-                 modes: Path | None = None, plan: Path | None = None) -> None:
+                 modes: Path | None = None, plan: Path | None = None,
+                 allow_deprecated_pack: bool = False) -> None:
         from bom_schema import Bom
         from standard_pack import StandardPack
 
         self.deal_dir = deal
         self.bom = Bom.load(bom_dir)
-        self.pack = StandardPack.load(pack_dir)
+        self.pack = StandardPack.load(pack_dir, allow_deprecated=allow_deprecated_pack)
         self.result = json.loads(
             (deal / "out" / "costing-result.json").read_text(encoding="utf-8"))
         self.modes_path, self.plan_path = modes, plan
@@ -390,9 +391,12 @@ def main() -> None:
     ap.add_argument("--pack", required=True, type=Path)
     ap.add_argument("--modes", type=Path)
     ap.add_argument("--delivery-plan", type=Path)
+    ap.add_argument("--allow-deprecated-pack", action="store_true",
+                    help="允许加载已退役的标准包 —— 仅用于历史报价复算")
     args = ap.parse_args()
 
-    sr = SelfReview(args.deal, args.bom, args.pack, args.modes, args.delivery_plan)
+    sr = SelfReview(args.deal, args.bom, args.pack, args.modes, args.delivery_plan,
+                    allow_deprecated_pack=args.allow_deprecated_pack)
     result = sr.run()
     out = args.deal / "out"
     (out / "06-财评自审报告.md").write_text(
