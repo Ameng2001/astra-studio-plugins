@@ -48,8 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from bom_schema import FP_COUNTED_CLASSES, Bom, BomItem, Nesma, Path_
-
-BATCH = 200
+from lark_table import BATCH, LarkTableError, lark, replace_all
 
 #: 样例表用 IFPUG 的 EIF，山东标准用 ELF —— 同一概念，双向映射
 TYPE_TO_SHEET = {"ELF": "EIF"}
@@ -57,21 +56,6 @@ TYPE_FROM_SHEET = {"EIF": "ELF"}
 
 FIELDS = ["子系统", "一级模块", "二级模块", "三级模块", "四级模块",
           "功能点计数项名称", "功能描述", "类别", "应用类型", "备注", "条目ID"]
-
-
-def lark(*args: str) -> dict[str, Any]:
-    """调用 lark-cli 并解析 JSON。
-
-    用 `--format json` 而不是 `--json` 指定输出格式 —— 后者在
-    `+record-batch-create` / `+record-delete` 等命令上是**载荷参数**，
-    追加会变成 `--json <载荷> --json`，末尾那个没有参数直接报错。
-    """
-    r = subprocess.run(["lark-cli", *args, "--format", "json"],
-                       capture_output=True, text=True)
-    try:
-        return json.loads(r.stdout)
-    except json.JSONDecodeError:
-        return {"ok": False, "error": {"raw": (r.stdout or r.stderr)[:300]}}
 
 
 def _row(it: BomItem) -> dict[str, Any]:
@@ -106,40 +90,16 @@ def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
         if not tid:
             detail[system] = "⚠️ 配置中无对应表，跳过"
             continue
-        n = _push_table(bt, tid, [_row(i) for i in items])
-        if isinstance(n, dict):
-            return {"ok": False, "written": total, "error": n}
+        try:
+            n = replace_all(bt, tid, [_row(i) for i in items],
+                            label=cfg.get("table_names", {}).get(system, system))
+        except LarkTableError as e:
+            # 整批中止而不是跳过继续 —— 一半表新一半表旧，比整批失败更难查
+            return {"ok": False, "written": total, "error": str(e)}
         total += n
         detail[system] = n
     return {"ok": True, "written": total, "detail": detail,
             "bom_version": bom.version}
-
-
-def _push_table(bt: str, tid: str, rows: list[dict[str, Any]]):
-    # 清空必须**反复取页直到表空** —— 只取一页 id 删完就退出，
-    # 会留下剩余记录与新数据叠加（实测 1764 条只删了 200）
-    while True:
-        r = lark("base", "+record-list", "--base-token", bt, "--table-id", tid,
-                 "--as", "user", "--limit", str(BATCH))
-        ids = (r.get("data") or {}).get("record_id_list", [])
-        if not ids:
-            break
-        d = lark("base", "+record-delete", "--base-token", bt, "--table-id", tid,
-                 "--as", "user", "--yes",
-                 "--json", json.dumps({"record_id_list": ids}))
-        if not d.get("ok"):
-            return d.get("error")
-
-    written = 0
-    for s in range(0, len(rows), BATCH):
-        r = lark("base", "+record-batch-create", "--base-token", bt,
-                 "--table-id", tid, "--as", "user",
-                 "--json", json.dumps({"create_records": rows[s:s + BATCH]},
-                                      ensure_ascii=False))
-        if not r.get("ok"):
-            return r.get("error")
-        written += len(r["data"].get("record_id_list", []))
-    return written
 
 
 # ---- pull --------------------------------------------------------------

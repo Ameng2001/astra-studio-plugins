@@ -36,9 +36,9 @@ from typing import Any
 from bom_schema import Bom, BomItem, is_fp_counted
 from costing_engine import PLACEHOLDER_TAG, CostingEngine, DealConfig
 from nesma_weights import xlround
+from lark_table import BATCH, lark, replace_all
 from standard_pack import StandardPack
 
-BATCH = 200
 TYPE_TO_SHEET = {"ELF": "EIF"}
 
 #: 计算书列。与样例表《功能点计算书》对齐，外加条目ID 供回溯到 BOM。
@@ -51,15 +51,6 @@ DETAIL_FIELDS = [
     ("复用度", "text"), ("修改类型", "text"),
     ("备注", "text"),
 ]
-
-
-def lark(*args: str) -> dict[str, Any]:
-    r = subprocess.run(["lark-cli", *args, "--format", "json"],
-                       capture_output=True, text=True)
-    try:
-        return json.loads(r.stdout)
-    except json.JSONDecodeError:
-        return {"ok": False, "error": {"raw": (r.stdout or r.stderr)[:300]}}
 
 
 def _tables(bt: str) -> dict[str, str]:
@@ -300,7 +291,7 @@ def init(bom: Bom, pack: StandardPack, folder: str, counting_method: str) -> dic
         tables[tname] = got[tname]
 
     # US 公式列必须在参数表有数据之后建，否则公式校验期查不到引用的行
-    _push_table(bt, tables["0 区域参数表"], param_rows(pack, counting_method))
+    replace_all(bt, tables["0 区域参数表"], param_rows(pack, counting_method), "0 区域参数表")
     expr = us_expression(pack, counting_method)
     if "US" in _fields(bt, tables["功能点计算书"]):
         return {"base_token": bt, "base_name": name, "pack_id": pack.pack_id,
@@ -328,30 +319,6 @@ def init(bom: Bom, pack: StandardPack, folder: str, counting_method: str) -> dic
 # ---- push --------------------------------------------------------------
 
 
-def _push_table(bt: str, tid: str, rows: list[dict[str, Any]]):
-    while True:
-        r = lark("base", "+record-list", "--base-token", bt, "--table-id", tid,
-                 "--as", "user", "--limit", str(BATCH))
-        ids = (r.get("data") or {}).get("record_id_list", [])
-        if not ids:
-            break
-        d = lark("base", "+record-delete", "--base-token", bt, "--table-id", tid,
-                 "--as", "user", "--yes",
-                 "--json", json.dumps({"record_id_list": ids}))
-        if not d.get("ok"):
-            raise RuntimeError(f"清表失败：{d.get('error')}")
-    written = 0
-    for s in range(0, len(rows), BATCH):
-        r = lark("base", "+record-batch-create", "--base-token", bt, "--table-id", tid,
-                 "--as", "user",
-                 "--json", json.dumps({"create_records": rows[s:s + BATCH]},
-                                      ensure_ascii=False))
-        if not r.get("ok"):
-            raise RuntimeError(f"写入失败：{r.get('error')}")
-        written += len(r["data"].get("record_id_list", []))
-    return written
-
-
 def push(bom: Bom, pack: StandardPack, cfg: dict[str, Any]) -> dict[str, Any]:
     if cfg.get("pack_id") != pack.pack_id:
         raise RuntimeError(
@@ -362,9 +329,9 @@ def push(bom: Bom, pack: StandardPack, cfg: dict[str, Any]) -> dict[str, Any]:
     reuse = cfg.get("reuse_level", "新建")
     params, details = param_rows(pack, cm), detail_rows(bom, pack, reuse)
     check_vocabulary(details, params)
-    n_p = _push_table(bt, t["0 区域参数表"], params)
-    n_d = _push_table(bt, t["功能点计算书"], details)
-    n_s = _push_table(bt, t["测算汇总"], summary_rows(bom, pack, cm))
+    n_p = replace_all(bt, t["0 区域参数表"], params, "0 区域参数表")
+    n_d = replace_all(bt, t["功能点计算书"], details, "功能点计算书")
+    n_s = replace_all(bt, t["测算汇总"], summary_rows(bom, pack, cm), "测算汇总")
     return {"ok": True, "参数": n_p, "计算书": n_d, "汇总": n_s,
             "bom_version": bom.version, "pack_id": pack.pack_id}
 

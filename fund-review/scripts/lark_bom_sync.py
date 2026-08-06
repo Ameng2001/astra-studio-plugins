@@ -26,25 +26,10 @@ from pathlib import Path
 from typing import Any
 
 from bom_schema import Bom
+from lark_table import BATCH, LarkTableError, lark, replace_all
 from nesma_weights import ESTIMATED_WEIGHTS as W
 
-BATCH = 200          # 飞书单次批量写入上限
 PLACEHOLDER_TAG = "placeholder"
-
-
-def lark(*args: str) -> dict[str, Any]:
-    """调用 lark-cli 并解析 JSON。
-
-    用 `--format json` 而不是 `--json` 指定输出格式 —— 后者在
-    `+record-batch-create` / `+record-delete` 等命令上是**载荷参数**，
-    追加会变成 `--json <载荷> --json`，末尾那个没有参数直接报错。
-    """
-    r = subprocess.run(["lark-cli", *args, "--format", "json"],
-                       capture_output=True, text=True)
-    try:
-        return json.loads(r.stdout)
-    except json.JSONDecodeError:
-        return {"ok": False, "error": {"raw": (r.stdout or r.stderr)[:300]}}
 
 
 # ---- push --------------------------------------------------------------
@@ -58,30 +43,10 @@ def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
     bt = cfg["base_token"]
     tid = cfg["tables"]["功能点清单"]
 
-    # 清空必须**反复取页直到表空** —— 只取一页 id 删完就退出，
-    # 会留下剩余记录与新数据叠加（实测 1764 条只删了 200）
-    while True:
-        r = lark("base", "+record-list", "--base-token", bt, "--table-id", tid,
-                 "--as", "user", "--limit", str(BATCH))
-        ids = (r.get("data") or {}).get("record_id_list", [])
-        if not ids:
-            break
-        d = lark("base", "+record-delete", "--base-token", bt, "--table-id", tid,
-                 "--as", "user", "--yes",
-                 "--json", json.dumps({"record_id_list": ids}))
-        if not d.get("ok"):
-            return {"ok": False, "written": 0, "error": d.get("error")}
-
-    records = [_to_row(i) for i in bom.active()]
-    written = 0
-    for start in range(0, len(records), BATCH):
-        payload = json.dumps({"create_records": records[start:start + BATCH]},
-                             ensure_ascii=False)
-        r = lark("base", "+record-batch-create", "--base-token", bt,
-                 "--table-id", tid, "--as", "user", "--json", payload)
-        if not r.get("ok"):
-            return {"ok": False, "written": written, "error": r.get("error")}
-        written += len(r["data"].get("record_id_list", []))
+    try:
+        written = replace_all(bt, tid, [_to_row(i) for i in bom.active()], "功能点清单")
+    except LarkTableError as e:
+        return {"ok": False, "written": 0, "error": str(e)}
     return {"ok": True, "written": written, "bom_version": bom.version}
 
 
