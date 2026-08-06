@@ -1,8 +1,36 @@
-"""derive_fp — reverse-derive function points from existing 人/天 estimates.
+"""derive_fp —— 从既有人天反推功能点。
 
-Per global.md G3.1:
     FP = 人天 ÷ (6.51 / 8) = 人天 ÷ 0.81375
-i.e. every 0.81 person-day ≈ 1 FP at the P50 productivity baseline.
+
+⚠️ **本模块做的是反推，与本插件的第一性原理冲突，不得用于定价。**
+
+设计方案 §0.3「定价方法倒挂」点名批评的正是这个链路：
+
+  raw-input 主清单：先有人天档位 → 得报价（`报价参照说明` sheet 明写
+      「人天档位均来自源清单末级功能报价」）
+  功能点测算表：事后补的 FP，与主清单报价互不校验
+      （行业专业模型 FP 法 ¥207K vs 报价 ¥1,470,000，差 7.1 倍）
+  本模块：FP = 人天 ÷ 0.81375，同样是反推
+
+**财评专家会直接问「你的功能点是怎么数出来的」。反推链路无法回答。**
+
+正向链路是：BOM 逐条按 NESMA 识别功能点类型（`bom_build` + `nesma_rules`，
+每条带 rationale 与双人复核）→ `baseline_build` 按区域标准算基准 →
+`quote_generate` 施加交付方案。那条链路上任何一个数都能追到条目与条款。
+
+## 那这个模块留着干什么
+
+**只用于与旧报价交叉校验** —— 拿旧清单的人天反推出一个 FP 量级，
+与正向数出来的 FP 比对，量级差得离谱时提示「这一块可能拆漏了或拆重了」。
+它是**体检工具**，不是计价工具。
+
+对应地，BOM 条目上的 `legacy_quote` 字段也标着「仅供交叉校验，不作定价依据」，
+`quote_selfreview` 的 C2-01 检查就是拿它来回答「你们是先有价再凑功能点吗」。
+
+调用方（`run_optimize` / `run_review` / `scan_labor`）目前都在
+`quote-optimize` / `quote-review` 那条老链路上，且**技能并不调它们**
+（技能用散文描述扫描逻辑）。那条链路是接回去还是归档，待产品决策 ——
+但无论怎么决定，本模块的产物都不能进报价。
 """
 from __future__ import annotations
 
