@@ -782,6 +782,29 @@ check("锁标准算例：800 万 → 13.04 万", round(_eval_xl(_x, 800.0), 2), 
 
 
 
+# --- 因子按「能不能进 Excel」分三类，处理方式不同 ---
+# 乘一个数 / 加减一批行 → 活公式；换一套分派或第二层口径 → 只能重跑。
+# 「声明了却不生效」是最坏的一种：人以为改了。
+with tempfile.TemporaryDirectory() as _td3:
+    _c = Path(_td3) / "deal.yaml"
+    _c.write_text("deal_id: x\ncounting_method: 预估功能点法\n", encoding="utf-8")
+    doc3, _ = qg.load_deal_file(_c)
+    check("counting_method 可写进 deal.yaml（作声明与校验）",
+          doc3["counting_method"], "预估功能点法")
+
+# 项目特征因子：乘一个数 → Excel 表达得了，且与引擎同构
+#   engine: effort = xlround(xlround(afp*prod/hpm, 2) * pf, 2)
+from nesma_weights import xlround as _xr
+def _eff(afp, prod, hpm, pf):
+    e = _xr(afp * prod / hpm, 2)
+    return _xr(e * pf, 2) if pf != 1.0 else e
+check("pf=1.0 时与不乘等价（所以公式可常在）",
+      _eff(830.06, 6.71, 174, 1.0), _xr(830.06 * 6.71 / 174, 2))
+check("pf=1.2 时按外层再取整", _eff(830.06, 6.71, 174, 1.2),
+      _xr(_xr(830.06 * 6.71 / 174, 2) * 1.2, 2))
+
+
+
 if FAILURES:
     print("守卫回归 —— 失败 %d 项：" % len(FAILURES))
     for f in FAILURES:

@@ -485,7 +485,7 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
         f"列而不计 —— 列出以证明不是漏项。")
     det.finish()
 
-    par, rows = emit_pricing_params(wb, result, pack, method, items)
+    par, rows = emit_pricing_params(wb, result, pack, method, items, engine)
     emit_whatif(wb, result, pack, engine, items, method, par, rows)
 
     emit_scope_whatif(wb, result, pack, engine, items, par, rows)
@@ -628,7 +628,7 @@ def emit_scope_whatif(wb, result: dict[str, Any], pack: StandardPack,
 
 
 def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
-                        method: str, items: list | None = None
+                        method: str, items: list | None = None, engine=None
                         ) -> tuple[Any, dict[str, int]]:
     """02 计价参数 —— 同时是 03 试算的**参数面板**。
 
@@ -715,6 +715,23 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
                f"{dev_node.get('note') or '人月费率不按开发类别调整'}。"
                f"03_二层试算 的人月费率直接取基准人月费率。")
 
+    # ---- 第三层：本商机的选择 ----
+    # 项目特征因子是 deal 级决策，不是标准取值 —— 所以白格（可改），
+    # 且必须写明它**不属任何地方标准**。放在这里是因为它乘在第二层的
+    # 工作量链上，但层归属要标清楚：改了它不是「调参数」，
+    # 是「决定本项目要不要引入一段没有地方标准依据的调整」。
+    pf_val, pf_rows = engine.project_factor()
+    s.blank()
+    s.note("　【第三层 · 本商机的选择】以下取值**不属区域标准**，由商机决定")
+    rows["pf"] = s.row(
+        {"参数": "　项目特征因子（连乘值）", "取值": pf_val,
+         "单位/说明": ("已启用：" + "、".join(
+             f"{r['因子']}={r['取值']}" for r in pf_rows)) if pf_rows else
+         "**未启用**（取 1.0）。启用会在报价里引入一段没有地方标准依据的调整"},
+        clause=("GB/T 36964 —— **国标参考，非地方标准**，"
+                "启用须在编制说明显式标注" if pf_rows else
+                "未启用 —— 本项目不引入该组因子"))
+
     weights, w_cite = pack.value(f"fp_counting.{method}.weights")
     s.blank()
     s.note("　【功能点权重】")
@@ -757,11 +774,13 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
     a_size, a_prod = f"{P}!$C${prows['size']}", f"{P}!$C${prows['prod']}"
     a_hpm, a_rate = f"{P}!$C${prows['hpm']}", f"{P}!$C${prows['rate']}"
     a_reuse = f"{P}!$C${prows['reuse']}"
+    a_pf = f"{P}!$C${prows['pf']}"          # 第三层：项目特征因子
     size = pack.factor("size_change", method)
     reuse = pack.factor("reuse", "新建")
     hpm = pack.rate("man_hours_per_month")
     prod = pack.rate("productivity_hours_per_fp")
     base_rate = pack.rate("base_man_month_rate")
+    pf_val = engine.project_factor()[0]
 
     # 维度按**标准包实际有什么**来定，不预设山东的形状 ——
     # 广东人月费率固定 24000，没有开发类别这个维度，硬留一列就是假的。
@@ -804,6 +823,8 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
 
         afp = xlround(ufp * size * reuse * app_f, 2)
         effort = xlround(afp * prod / hpm, 2)
+        if pf_val != 1.0:
+            effort = xlround(effort * pf_val, 2)
         rate = xlround(base_rate * dev_f, 2)
         cost = xlround(effort * rate, 2)
         sum_cost += cost
@@ -834,8 +855,13 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
                 f"*{C['应用类型因子']}{row_no},2)",
                 afp, sysrow["afp"], rel_tol=0.001,
                 where=f"[03_二层试算] {sysrow['system'][:20]} 调整后功能点"),
+            # 外层 ROUND 乘项目因子 —— 与引擎同构：
+            # effort = xlround(xlround(afp*prod/hpm,2) * pf, 2)。
+            # 未启用时 pf=1.0，ROUND(ROUND(x,2)*1.0,2) 恒等于 ROUND(x,2)，
+            # 所以公式常在，不必分两种写法。
             "工作量（人月）": gov_sheet.formula(
-                f"=ROUND({C['调整后功能点']}{row_no}*{a_prod}/{a_hpm},2)",
+                f"=ROUND(ROUND({C['调整后功能点']}{row_no}*{a_prod}/{a_hpm},2)"
+                f"*{a_pf},2)",
                 effort, sysrow["effort_man_months"], rel_tol=0.001,
                 where=f"[03_二层试算] {sysrow['system'][:20]} 工作量"),
             "人月费率（元）": gov_sheet.formula(
@@ -1386,6 +1412,19 @@ def main() -> None:
     if args.baseline:
         baseline, baseline_lock, bom, pack = load_baseline(args.baseline)
         counting_method = baseline["counting_method"]
+        # 计数方法属**第二层口径** —— 它决定基准怎么算，不是商机能挑的。
+        # deal.yaml 里写了却被基准覆盖，是「声明了不生效」——
+        # 比不支持更糟：人以为改了。所以对不上就报错并指路。
+        want = deal_doc.get("counting_method")
+        if want and want != counting_method:
+            raise SystemExit(
+                f"deal.yaml 声明 counting_method={want!r}，"
+                f"但基准是按 {counting_method!r} 算的。\n"
+                f"  计数方法决定**基准**怎么算，不是第三层能挑的 —— "
+                f"换它要重建基准：\n"
+                f"    baseline_build --bom bom --pack <标准包> "
+                f"--counting-method {want}\n"
+                f"  然后把 deal.yaml 的 baseline 指向新目录。")
     elif args.bom and args.pack:
         # 直连模式：不经第二层。保留是为了快速试算与历史脚本，
         # 但**产出不带基准溯源**，正式报价应走 --baseline。
