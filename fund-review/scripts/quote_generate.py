@@ -494,11 +494,13 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
     s.blank()
     s.note("　【应用类型调整因子表】明细表逐行标注的「应用类型因子」取自此表")
     app_tbl = (pack.data.get("factors", {}).get("app_type", {}).get("values") or {})
+    rows["app_first"] = s._next
     for k, v in sorted(app_tbl.items(), key=lambda kv: kv[1]):
         rows[f"app:{k}"] = s.row(
             {"参数": f"　应用类型 · {k}", "取值": v,
              "单位/说明": "本项目用到" if k in used_apps else ""},
             clause=str(pack.value("factors.app_type")[1]))
+    rows["app_last"] = s._next - 1
 
     # 开发类别系数 —— 人月费率 = 基准人月费率 × 本系数。清单里印着
     # ¥26,009.50 与 ¥23,645，中间这个 1.1 此前哪儿都没有，评审只能反推。
@@ -506,11 +508,13 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
     if dev_tbl:
         s.blank()
         s.note("　【开发类别调整系数】人月费率 = 基准人月费率 × 本系数")
+        rows["dev_first"] = s._next
         for k, v in sorted(dev_tbl.items(), key=lambda kv: -kv[1]):
             rows[f"dev:{k}"] = s.row(
                 {"参数": f"　开发类别 · {k}", "取值": v,
                  "单位/说明": "本项目用到" if k in _dev_cats_used(result) else ""},
                 clause=str(pack.value("factors.dev_category")[1]))
+        rows["dev_last"] = s._next - 1
 
     weights, w_cite = pack.value(f"fp_counting.{method}.weights")
     s.blank()
@@ -567,11 +571,11 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
                  "本表为试算工具，**送审值以 00_测算汇总 为准**。",
         columns=[
             gov_sheet.Col("子系统", width=38),
-            gov_sheet.Col("应用类型", width=12),
-            gov_sheet.Col("开发类别", width=18),
+            gov_sheet.Col("应用类型", width=14, cell_role="input"),
+            gov_sheet.Col("开发类别", width=20, cell_role="input"),
             gov_sheet.Col("未调整功能点", "fp", width=13, sum=True),
-            gov_sheet.Col("应用类型因子", "rate", width=12, cell_role="locked"),
-            gov_sheet.Col("开发类别系数", "rate", width=12, cell_role="locked"),
+            gov_sheet.Col("应用类型因子", "rate", width=12, cell_role="calc"),
+            gov_sheet.Col("开发类别系数", "rate", width=12, cell_role="calc"),
             gov_sheet.Col("调整后功能点", "fp", width=13, sum=True,
                           cell_role="calc"),
             gov_sheet.Col("工作量（人月）", "fp", width=13, sum=True,
@@ -599,12 +603,24 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
         sum_cost += cost
 
         C = {n: get_col_letter(s, n) for n in
-             ("未调整功能点", "应用类型因子", "开发类别系数",
-              "调整后功能点", "工作量（人月）", "人月费率（元）")}
+             ("应用类型", "开发类别", "未调整功能点", "应用类型因子",
+              "开发类别系数", "调整后功能点", "工作量（人月）", "人月费率（元）")}
+        # 系数不写死，从 02 的系数表查 —— 样例表是 IF(C2=…)，我们用 VLOOKUP。
+        # 写死的话「把平台能力从智能信息改成业务处理」这种试算就做不了：
+        # 改了名字系数不动，等于什么都没试。
+        app_rng = (f"{P}!$B${prows['app_first']}:$C${prows['app_last']}")
+        dev_rng = (f"{P}!$B${prows['dev_first']}:$C${prows['dev_last']}")
+        f_app = (f'=VLOOKUP("　应用类型 · "&{C["应用类型"]}{row_no},{app_rng},2,FALSE)')
+        f_dev = (f'=VLOOKUP("　开发类别 · "&{C["开发类别"]}{row_no},{dev_rng},2,FALSE)')
         s.row({
             "子系统": sysrow["system"], "应用类型": app_name,
             "开发类别": sysrow["dev_category"], "未调整功能点": ufp,
-            "应用类型因子": app_f, "开发类别系数": dev_f,
+            "应用类型因子": gov_sheet.formula(
+                f_app, app_f, app_f,
+                where=f"[03_试算] {sysrow['system'][:20]} 应用类型因子"),
+            "开发类别系数": gov_sheet.formula(
+                f_dev, dev_f, dev_f,
+                where=f"[03_试算] {sysrow['system'][:20]} 开发类别系数"),
             "调整后功能点": gov_sheet.formula(
                 f"=ROUND({C['未调整功能点']}{row_no}*{a_size}*{a_reuse}"
                 f"*{C['应用类型因子']}{row_no},2)",
