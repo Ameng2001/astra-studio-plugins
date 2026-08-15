@@ -1,0 +1,25 @@
+{
+  "name": "fund-review",
+  "version": "0.8.0",
+  "description": "End-to-end quote generation and financial-review pre-audit for government IT procurement, split into three tool layers: (1) a region-neutral BOM with a controlled vocabulary and NESMA quality gates, co-created in Feishu; (2) region baselines built from BOM x standard pack where every parameter carries a page-level citation, diffable across regions; (3) per-deal quotes applying delivery mode, subsystem-level scope and project factors. Emits procurement lists, function-point worksheets, operating-period costs, TCO comparison, compilation notes and a self-audit report; consistency violations fail loudly rather than silently.",
+  "author": {
+    "name": "junchang.w@gmail.com"
+  },
+  "keywords": [
+    "fund-review",
+    "quote-optimize",
+    "budget-standard",
+    "bom",
+    "nesma",
+    "function-point",
+    "财评",
+    "报价优化",
+    "功能点法",
+    "柳州",
+    "山东",
+    "幼教",
+    "康养"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/"
+}
