@@ -55,12 +55,55 @@ def materialize(bom_root: Path, deal: dict[str, Any], out: Path | None = None) -
     (d / "items").mkdir(parents=True)
 
     b = Bom.compose(bom_root, deal["compose"])
+    disp = deal.get("display_names") or {}
     (d / "VERSION").write_text(b.version + "\n", encoding="utf-8")
 
     # ---- items：按子系统分片，与 v1 的 default_shard_key 同口径 ----
+    # ---- 显示名：**只改物化视图，产品级 BOM 一个字不动** ----
+    # 商机可以要求沿用历史叫法（柳州已按旧名报过一轮，改名评审会问），
+    # 但那是这一个商机的展示口径，不是产品事实 —— 写进 BOM 就会溢出到
+    # 其他商机（架构规矩二、三）。
+    #
+    # **总表与明细分两路映射**，因为它们的取数源不同：总表按 taxonomy 的
+    # 产品线分组，明细按条目自己的 path.product_line 显示。v1 这两处本就
+    # 不一致（taxonomy 说 AI计算平台 属支撑基座，条目 path 写行业大模型），
+    # 用一份映射对齐不了两处。
+    d_detail = disp.get("product_line_detail") or {}
+    d_by_sys = disp.get("by_system") or {}
+    # 条目 ID 的展示前缀。ID 在库里是**键**（规矩一：带命名空间、永不复用），
+    # 但印在送审件上它同时是给评审看的编号，而柳州已按不带 vertical 前缀的
+    # 旧编号报过一轮。所以允许商机在展示层剥掉该前缀 —— 库里一个字不改。
+    strip = disp.get("strip_id_prefix") or []
+    if isinstance(strip, str):
+        strip = [strip]
     by_sys: dict[str, list] = {}
+    seen_id: dict[str, str] = {}
     for it in b.items:
-        by_sys.setdefault(it.path.system, []).append(it.to_dict())
+        row = it.to_dict()
+        pl = (row.get("path") or {}).get("product_line")
+        new = d_by_sys.get(it.path.system) or d_detail.get(pl)
+        if new and new != pl:
+            row["path"]["product_line"] = new
+            row["_display_name_from"] = pl      # 留痕：改前叫什么
+        for pre in strip:
+            iid = str(row.get("id") or "")
+            if pre in iid:
+                short = iid.replace(pre, "", 1)
+                # **剥前缀会不会撞车，必须当场验。** 前缀正是用来隔离命名空间的，
+                # 剥掉之后两层可能出现同号；重号会让 UFP 被计两遍或被去重掉一条，
+                # 而金额照样算得出来（v1 真出过 110 个重号、472 UFP 双计）。
+                if short in seen_id:
+                    raise ValueError(
+                        f"strip_id_prefix {pre!r} 使 {iid} 与 {seen_id[short]} "
+                        f"同为 {short} —— 剥掉命名空间后重号。"
+                        f"重号不会报错，只会让 UFP 少算或多算，所以这里硬失败。")
+                seen_id[short] = iid
+                row["_id_full"] = iid
+                row["id"] = short
+                break
+        else:
+            seen_id.setdefault(str(row.get("id") or ""), str(row.get("id") or ""))
+        by_sys.setdefault(it.path.system, []).append(row)
     for s, items in by_sys.items():
         # 文件名用子系统名；v1 也是这么分的，下游只 glob 不认文件名
         safe = str(s).replace("/", "-")
@@ -78,8 +121,12 @@ def materialize(bom_root: Path, deal: dict[str, Any], out: Path | None = None) -
         for k in ("id_scheme", "maturity_vocabulary", "costing_method_by_layer"):
             if c.get(k):
                 tax[k] = c[k]
+    d_sum = disp.get("product_line_summary") or {}
     for pl, pd in (b.taxonomy.get("product_lines") or {}).items():
-        tax["product_lines"][pl] = pd
+        name = d_sum.get(pl, pl)
+        if name != pl:
+            pd = {**pd, "_display_name_from": pl}
+        tax["product_lines"][name] = pd
     _apply_overrides(tax, deal.get("overrides") or {}, deal)
     (d / "taxonomy.yaml").write_text(
         yaml.safe_dump(tax, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -138,6 +185,18 @@ def merge_devices(bom_root: Path, deal: dict, dst: Path) -> dict[str, int]:
             rows.extend(doc.get(key) or [])
         if not found:
             continue
+        # ---- 展示顺序：按各行自己的 display_seq 排，不靠层的先后 ----
+        # 层顺序不是展示顺序。把网络覆盖拆到共享层之后，它就从第 18 位跳到
+        # 第 1 位 —— 内容一条没变，120 行全部错位，金额分毫不差，
+        # 所以没有任何一处校验会响。
+        #
+        # **序号挂在条目上，不挂在场景上。** 源表的行序并没有按场景聚合
+        # （健康体测的条目散在第 2–15 与第 81 行），按场景排会把它们并到
+        # 一起 —— 那是「整理得更整齐」，但与已报过的版本对不上了。
+        # 丙附是配置录入工具，行序变了等于让填表的人重新找行。
+        if key in ("scenes", "entries") and any("display_seq" in r for r in rows):
+            rows.sort(key=lambda x: (x.get("display_seq") is None,
+                                     x.get("display_seq") or 0))
         if key == "materials":
             # 价格合回：按料号取 pricing.yaml。缺价格文件时物料无价，
             # 出表会走「待核价」而非静默按 0 计 —— 后者会让金额悄悄变小。
@@ -170,6 +229,7 @@ def merge_devices(bom_root: Path, deal: dict, dst: Path) -> dict[str, int]:
                         .get("cost") or {}).items():
             if v and v.get("cost_yuan"):
                 cost[code] = v["cost_yuan"]
+    stat.pop("_scene_seq", None)      # 内部传递用，不进对外统计
     if cost:
         (d / "cost-reference.yaml").write_text(
             yaml.safe_dump({"version": "0.1.0",
