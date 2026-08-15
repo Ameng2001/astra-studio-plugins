@@ -80,7 +80,7 @@ def materialize(bom_root: Path, deal: dict[str, Any], out: Path | None = None) -
                 tax[k] = c[k]
     for pl, pd in (b.taxonomy.get("product_lines") or {}).items():
         tax["product_lines"][pl] = pd
-    _apply_overrides(tax, deal.get("overrides") or {})
+    _apply_overrides(tax, deal.get("overrides") or {}, deal)
     (d / "taxonomy.yaml").write_text(
         yaml.safe_dump(tax, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
@@ -231,22 +231,47 @@ def _merge_groups(bom_root: Path, deal: dict, dst: Path, name: str, key: str) ->
             encoding="utf-8")
 
 
-def _apply_overrides(tax: dict, ovr: dict) -> None:
+def _apply_overrides(tax: dict, ovr: dict, deal: dict | None = None) -> None:
     """把 deal.overrides 写进 taxonomy，使下游按覆盖后的参数计价。
 
     **只覆盖 deal 显式点名的子系统**。曾经把「某行业的类别取值」写成按行业
     全局生效，结果共享层的三个引擎在该行业贵了 50% —— 同一个 Harness 引擎
     在两个项目报出两个价，违反跨行业一致性。覆盖必须逐子系统指定。
+
+    ## overrides 真正改变的是「归哪一类」，不是「这一类值多少」
+
+    `overrides.app_type[子系统].app_type` 改子系统的类别归属 —— 这个生效。
+    同处的 `value` 只是把该类因子**重述一遍**：真正被计价读到的是
+    `deal.fp_method_settings.app_type_factors[类别].value`（出套表）与
+    标准包的该类缺省（出基线）。
+
+    早先这里把 `value` 写成 `app_type_override_value` 存进 taxonomy，
+    而下游两条链路都不读它 —— 一个写了没人读的字段，看起来覆盖生效了，
+    实则由别处的值说了算。两处一旦分叉，金额会安静地按另一个数出，
+    没有任何一处报错。所以这里不再写它，改为**校验两处一致**：
+    不一致就当场失败，把「哪个数说了算」摆到台面上。
     """
     at = ovr.get("app_type") or {}
     ru = ovr.get("reuse") or {}
+    factors = (((deal or {}).get("fp_method_settings") or {})
+               .get("app_type_factors") or {})
+    for s, o in at.items():
+        v, cls = o.get("value"), o.get("app_type")
+        if v is None or not cls:
+            continue
+        declared = (factors.get(cls) or {}).get("value")
+        if declared is not None and float(declared) != float(v):
+            raise ValueError(
+                f"overrides.app_type[{s!r}].value = {v} 与 "
+                f"fp_method_settings.app_type_factors[{cls!r}].value = {declared} 不一致。\n"
+                f"  计价读的是后者 —— 前者只是重述。改一处不改另一处，"
+                f"金额会按后者出且不报错。请改成一致，或删掉 overrides 里的 value。")
     for pl, pd in (tax.get("product_lines") or {}).items():
         for s, sd in (pd.get("systems") or {}).items():
             if s in at:
                 o = at[s]
                 if o.get("app_type"):
                     sd["app_type"] = o["app_type"]
-                sd["app_type_override_value"] = o.get("value")
                 sd["app_type_basis"] = o.get("basis", sd.get("app_type_basis", ""))
             if s in ru:
                 o = ru[s]
