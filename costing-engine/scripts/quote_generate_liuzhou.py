@@ -553,7 +553,10 @@ def emit_fp_detail(wb, root: Path, pack: StandardPack,
                                           x["path"]["system"], x["id"])):
         sysname = i["path"]["system"]
         if sysname not in cat_of:
-            cat_of[sysname] = _sys_app_type(root, sysname)
+            # 表上一律写本标准自己的类别名（见 3497 处的同款注释）：
+            # 产品级存规范词表，出表时经 aliases 落回本区域的词。
+            cat_of[sysname] = pack.factor_label(
+                "app_type", _sys_app_type(root, sysname))
         cat = cat_of[sysname]
         fac = fpset["app_type"][cat][0]
         w = W[i["nesma"]["type"]]
@@ -1093,7 +1096,9 @@ def emit_reuse_modules(wb, root: Path, pack: StandardPack, fpset: dict,
         for sysname, blk in (sw.get("systems") or {}).items():
             if sysname not in effort_only or not blk.get("stages"):
                 continue
-            at = (tax.get(sysname) or {}).get("app_type") or "—"
+            # 同前：产品级存规范词表，表上写本标准自己的词
+            _raw_at = (tax.get(sysname) or {}).get("app_type")
+            at = pack.factor_label("app_type", _raw_at) if _raw_at else "—"
             objs = [lf for lf in (blk.get("leaves") or [])
                     if (lf.get("effort_basis") or {}).get("man_months")]
             if not objs:
@@ -1319,7 +1324,8 @@ def emit_fp_whatif(wb, pack: StandardPack, fpset: dict,
         for sysname, blk in (sw.get("systems") or {}).items():
             if sysname not in effort_only or not blk.get("stages"):
                 continue
-            at = (tax_all.get(sysname) or {}).get("app_type") or "—"
+            _raw_at = (tax_all.get(sysname) or {}).get("app_type")
+            at = pack.factor_label("app_type", _raw_at) if _raw_at else "—"
             _pct = {k: ((_wbs_t.get(sysname) or {}).get(k) or {}).get("pct", 0.0)
                     for k in STAGES}
             # 该系统「一个人月」横跨五阶段的加权价 = Σ(阶段占比 × 阶段单价)。
@@ -2087,10 +2093,36 @@ def read_device_config(root: Path, deal_dir: Path) -> dict[str, Any]:
                 "ref_price": m["price_yuan"] or 0,
                 "total": xlround(price * qty, 2),
                 "note": it.get("note", ""),
+                # 净化版备注。没给就是 None（不是空串）—— 两者含义不同：
+                # None = 没人处理过，空串 = 明确判定这条不进送审件。
+                "note_public": it.get("note_public"),
             }
             # 数量 > 0 却没有单价 —— 不是「免费」，是「还没定价」。
             # 计 ¥0 会让它在合计里消失且看不出来。
             (pending if (price == 0 and qty) else priced).append(rec)
+    # ---- 守卫：源表备注里的成本/渠道信息不得流进送审件 ----
+    # 这些备注是**源表原文**，业务侧随时会加新的。靠人记得每次检查
+    # 是靠不住的：备注列在甲附上不起眼，混一句「原价370」进去，
+    # 表照样出、金额分毫不差，没有任何一处会响。
+    import re as _re
+    _BAD = [("成本", r"成本(?!构成与定价依据)"), ("备货/进价", r"备货|进价|采购价"),
+            ("原价/降本", r"原价|降本|降配"), ("渠道/毛利", r"渠道|毛利")]
+    _leak = []
+    for r in priced + pending:
+        if r.get("note_public") is not None:
+            continue                      # 已给净化版，出表用那个
+        n = r.get("note") or ""
+        for label, pat in _BAD:
+            if _re.search(pat, n):
+                _leak.append((r.get("code"), r.get("name"), label, n[:70]))
+                break
+    if _leak:
+        _lines = "\n".join(f"    {c} {nm[:20]}　[{lb}] {t}…" for c, nm, lb, t in _leak[:10])
+        raise SystemExit(
+            f"⛔ device-config 有 {len(_leak)} 条备注含成本/渠道信息，"
+            f"且未给送审用的净化版 —— **未出表**：\n{_lines}\n"
+            f"  修法：给这些条目加 note_public（送审用的说法，原 note 保留不动）。\n"
+            f"  确实不该出现在备注里的，note_public 写空串即可。")
     return {"priced": priced, "pending": pending, "sheets": sheets,
             "config": cfg}
 
@@ -2185,7 +2217,14 @@ def emit_hardware_detail(wb, hw: dict, pack: StandardPack,
             if r["子场景"] != cur:
                 cur = r["子场景"]
                 s.group(f"{r['场景']}　·　{cur}", clause="三.(一)2.5 表7")
-            note = [r["note"]] if r["note"] else []
+            # **送审件取净化版备注**。device-config 的 note 是源表原文，
+            # 里面混着成本、备货价、渠道套餐价（「1个园成本为1200/10=121」
+            # 「桐乡备货价格，原价370」）—— 那些是配置口径的上下文，
+            # 对内有用，印在送审件上就是把成本摊给评审看。
+            # 原文保留在 note 里不动（要追溯源表说了什么），
+            # 送审只取 note_public；没给净化版的由下面的守卫拦住。
+            _n = r.get("note_public") if r.get("note_public") is not None else r["note"]
+            note = [_n] if _n else []
             if r["自研"] == "自研":
                 note.append("自研产品，须提供成本构成与定价依据")
             s.row({"一级场景": r["场景"], "子场景": r["子场景"],
@@ -3450,7 +3489,10 @@ def main() -> None:
             # 计算手段，不是标准的计价单元。逐档各取一次整，会在人月那一步
             # 攒出差（市平台实测 9.50+3.44+3.54=16.48 vs 一次取整 16.49，
             # 折 170 元），而那个差没有标准依据可讲。
-            cat_v = fpset["app_type"][at][0]
+            # 产品级存的是规范词表（科技/多媒体/智能信息），柳州包用自己的词
+            # （应用集成和科学计算/大数据、多媒体/人工智能）—— 查取值前先过 aliases。
+            _at_local = pack.factor_label("app_type", at)
+            cat_v = fpset["app_type"][_at_local][0]
             grps = [{**g, "contrib": g["ufp"] * cat_v * g["reuse_factor"]}
                     for g in info["groups"]]
             c = prof.fp_cost(sum(g["ufp"] * g["reuse_factor"] for g in grps),
@@ -3459,8 +3501,13 @@ def main() -> None:
             tot_fp, tot_mm, tot_yuan = c["fp"], c["effort_man_months"], c["cost"]
             fp_systems.append({
                 **x, **info, "groups": grps,
-                "app_type": at, "app_type_factor": fpset["app_type"][at][0],
-                "app_type_basis": fpset["app_type"][at][1],
+                # **表上写本标准自己的词。** 产品级存规范词表（科技/多媒体/
+                # 智能信息），柳州送审册要写「应用集成和科学计算」——
+                # 评审拿标准表3 逐行核对，表上出现一个表3 里没有的类别名，
+                # 就算金额分毫不差也会被当成没按标准取值。
+                "app_type": _at_local,
+                "app_type_factor": fpset["app_type"][_at_local][0],
+                "app_type_basis": fpset["app_type"][_at_local][1],
                 "productivity": c["productivity"],
                 "man_month_rate": c["man_month_rate"],
                 "fp": tot_fp, "effort_man_months": tot_mm, "cost": tot_yuan,

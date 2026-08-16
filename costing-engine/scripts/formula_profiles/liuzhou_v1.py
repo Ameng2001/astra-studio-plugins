@@ -294,8 +294,20 @@ def resolve_fp_settings(pack, settings: dict[str, Any] | None) -> dict[str, Any]
 
 def fp_cost(ufp: float, *, pack, app_type: str, settings: dict[str, Any],
             reuse_level: str = "新建", digits: int = 2) -> dict[str, Any]:
-    """按 deal 的可调项算一个子系统的功能点法金额，返回逐步展开。"""
-    cat_val, cat_basis = settings["app_type"][app_type]
+    """按 deal 的可调项算一个子系统的功能点法金额，返回逐步展开。
+
+    `app_type` 传进来的是**产品事实**（规范词表，山东 7 类是已知标准包的超集），
+    先经本包 aliases 解析成柳州自己的词再查取值 —— 这是「换省标准、BOM 一条
+    不改」的落点。产品级存「科技」，柳州叫「应用集成和科学计算」，山东就叫
+    「科技」；不解析就会在换包时 KeyError。
+    """
+    key = ((pack.data.get("factors") or {}).get("app_type") or {}) \
+        .get("aliases", {}).get(app_type, app_type)
+    if key not in settings["app_type"]:
+        raise ValueError(
+            f"{PROFILE_ID}: 子系统的软件类别 {app_type!r} 未解析到取值；"
+            f"已解析：{sorted(settings['app_type'])}")
+    cat_val, cat_basis = settings["app_type"][key]
     reuse = pack.factor("reuse", reuse_level)
     fp_count = xlround(ufp * cat_val * reuse, 2)
     prod = pack.rate("productivity_hours_per_fp") * settings["productivity_ratio"]

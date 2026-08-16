@@ -278,13 +278,16 @@ def main() -> None:
     for x in in_fp:
         info = ru[x["system"]]
         at = _sys_app_type(root, x["system"])
-        cat_v = fpset["app_type"][at][0]
+        # 同上：产品事实 → 本包词表，查取值前先过 aliases
+        cat_v = fpset["app_type"][pack.factor_label("app_type", at)][0]
         grps = [{**g, "contrib": g["ufp"] * cat_v * g["reuse_factor"]}
                 for g in info["groups"]]
         c = prof.fp_cost(sum(g["ufp"] * g["reuse_factor"] for g in grps),
                          pack=pack, app_type=at, settings=fpset, reuse_level="低")
         fp_systems.append({
-            **x, **info, "groups": grps, "app_type": at,
+            # 表上写广东自己的词（同柳州出表器的理由）
+            **x, **info, "groups": grps,
+            "app_type": pack.factor_label("app_type", at),
             "app_type_factor": cat_v, "man_month_rate": c["man_month_rate"],
             "fp": c["fp"], "effort_man_months": c["effort_man_months"],
             "cost": c["cost"], "reuse": info["reuse_factor"]})
