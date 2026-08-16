@@ -35,7 +35,16 @@ ITEM_CLASSES = {
     "DATASET",      # 数据集 → 数据资源购置 / 功能点法(治理加工)
     "HARDWARE",     # 硬件设备 → 硬件购置询价
     "SERVICE",      # 实施/集成/培训/设计/测试 → 费率法 / 人天法
+    #: 定制开发，但**按工作量估算法计价**（人月 × 阶段单价），不数功能点。
+    #: 柳州标准 p.10 三.(一)2.1 明文两法择一；本类别用于那些功能点法
+    #: **按定义测不到**的开发内容 —— 模型训练、语料治理、提示工程、算法引擎，
+    #: 它们不产生 ILF/EIF/EI/EO/EQ。不是「懒得数」，是这把尺子量不了。
+    #: 与 SOFTWARE_FP 的区别只在造价方法，两者都是定制开发。
+    "SOFTWARE_EFFORT",
 }
+
+#: 走工作量估算法的类别 —— 不要求 nesma，但**必须有工作量依据**
+EFFORT_COUNTED_CLASSES = {"SOFTWARE_EFFORT"}
 
 #: 走功能点法计数的类别 —— 带 nesma 段时按功能点计
 FP_COUNTED_CLASSES = {"SOFTWARE_FP", "KB", "DATASET"}
@@ -122,7 +131,11 @@ STATUSES = ["draft", "reviewed", "released", "deprecated"]
 #: 条目必须达到 reviewed 才允许带 rationale 门禁，达到 released 才允许进报价
 STATUS_ORDER = {s: i for i, s in enumerate(STATUSES)}
 
-ID_RE = re.compile(r"^[A-Z]{2,6}(\.[A-Z0-9]{2,8})+\.\d{4}$")
+#: `FP.PARK.0012` 特性级；`FP.PARK.0012.03` 是从该特性拆出的第 3 个基本过程。
+#: 保留父段而不是重新编号，是为了**在 id 上就能看出这条来自哪个特性** ——
+#: 拆分后一个特性变成两三条，评审问「这三条是不是同一件事重复计了」时，
+#: id 本身就是答案。
+ID_RE = re.compile(r"^[A-Z]{2,6}(\.[A-Z0-9]{2,8})+\.\d{4}(\.\d{2})?$")
 
 
 class BomError(ValueError):
@@ -185,6 +198,10 @@ class Path_:
     l2: str | None = None
     l3: str | None = None
     l4: str | None = None
+    #: 重挂产品线之前这条挂在哪个系统下。**不进 as_tuple，不参与计数** ——
+    #: 只为在架构调整后还能回答「这条原来是基座下的哪个子系统」。
+    #: 丢掉它，重挂就成了一次不可逆的改写。
+    l0_source: str | None = None
 
     def as_tuple(self) -> tuple[str, ...]:
         return tuple(x for x in (self.product_line, self.system,
@@ -235,6 +252,33 @@ class BomItem:
 
     # 仅供交叉校验，**不得**用于定价（见方案 §0.3 方法论倒挂）
     legacy_quote: dict[str, Any] = field(default_factory=dict)
+    #: 共创状态与处理建议（由 bom_annotate 打）。**是条目的事实，不是渲染细节** ——
+    #: 放在这里才能随 BOM 一起进 git、随 push 一起进飞书、随 pull 一起回来做 diff。
+    #: 之前它只写在 yaml 里，`from_dict` 直接丢掉，push 出去是空的。
+    #: 工作量估算法的采集项。**功能点法那套字段回答不了「人月怎么估出来的」** ——
+    #: SOFTWARE_EFFORT 条目没有 NESMA 类型、UFP 永远是 0，真正要采的是
+    #: 阶段（决定表1 单价）、人月、以及**可核查的量纲**（语料条数/模型数/
+    #: 评测轮次/数据源数）。没有量纲，人月就只是一个数字，财评问不出来源。
+    #: 形如 {"stage": "软件开发（编码）", "man_months": 2.9,
+    #:       "role": "算法工程师", "basis": "…", "metric": "菜品库 2000 条 …"}
+    effort: dict[str, Any] = field(default_factory=dict)
+    #: 工作量的**自下而上测算依据**（2026-08-09 起为工作量法的唯一取数口径）。
+    #: 形如 {"unit": "数据类目", "qty": 5, "per_unit_mm": 0.75,
+    #:       "man_months": 3.75, "counted_from": …, "counting_rule": …,
+    #:       "basis": …, "source": …}
+    #:
+    #: **与 `effort` 的关系**：`effort` 是旧采集结构（阶段/人月/角色/metric），
+    #: 其人月来自源估算表，实测 132 条全部满足 `人月 = 报价 ÷ 17,000`，
+    #: 即由对外报价倒算而来，不构成独立测算。`effort_basis` 是重估后的口径，
+    #: 引擎只读它（见 quote_generate_liuzhou 的 effort_from_bom 分支）。
+    #: 旧字段保留仅供交叉对账（丁本 02），**不得用于计价**。
+    effort_basis: dict[str, Any] = field(default_factory=dict)
+    #: 复用度（柳州标准表1 注3 / 表3 注2）。粒度为**建设对象**，
+    #: 形如 {"level": "高|中|低", "basis": "…"}。缺省为「低」（系数 1）。
+    #: 非「低」而无 basis 时引擎拒绝出表 —— 无出处的折扣在评审那里是「随意定价」。
+    reuse: dict[str, Any] = field(default_factory=dict)
+    coauthor_status: str = ""
+    coauthor_advice: str = ""
 
     def validate(self) -> None:
         if not ID_RE.match(self.id):
@@ -261,6 +305,17 @@ class BomItem:
                 raise BomError(
                     f"{self.id}: class={self.cls} 既无 nesma 也无 spec.subject —— "
                     f"造价口径未定")
+        elif self.cls in EFFORT_COUNTED_CLASSES:
+            # 工作量法不数功能点，但**人月必须有出处** ——
+            # 「不数功能点」不等于「不用给依据」，财评照样问「人月怎么来的」。
+            if self.nesma is not None:
+                raise BomError(
+                    f"{self.id}: class={self.cls} 走工作量估算法，不应有 nesma 段 —— "
+                    f"同一条目两种口径并存就是重复计列的入口")
+            if not (self.legacy_quote or {}).get("man_months"):
+                raise BomError(
+                    f"{self.id}: class={self.cls} 走工作量估算法，但没有人月取值。"
+                    f"标准 p.11 表1 按人月计价，没有人月就没有造价口径")
         elif self.nesma is None:      # SOFTWARE_FP
             raise BomError(f"{self.id}: class={self.cls} 走功能点法，但缺 nesma 段")
         if self.nesma:
@@ -291,6 +346,20 @@ class BomItem:
             d["tags"] = self.tags
         if self.legacy_quote:
             d["legacy_quote"] = self.legacy_quote
+        if self.effort:
+            d["effort"] = self.effort
+        # **这两个字段一旦漏在 to_dict 外，`Bom.save()` 就会把它们从 yaml 里删掉。**
+        # 而删掉之后 yaml 看起来完全正常，只有下一次出表才会报「没有
+        # effort_basis.man_months」—— 那时 149 条测算依据已经不可恢复。
+        # bom_apply / bom_rationale / bom_build 都会 save，任一次运行即触发。
+        if self.effort_basis:
+            d["effort_basis"] = self.effort_basis
+        if self.reuse:
+            d["reuse"] = self.reuse
+        if self.coauthor_status:
+            d["coauthor_status"] = self.coauthor_status
+        if self.coauthor_advice:
+            d["coauthor_advice"] = self.coauthor_advice
         return d
 
     @classmethod
@@ -305,6 +374,11 @@ class BomItem:
             since=d.get("since", "0.9.0"), deprecated_in=d.get("deprecated_in"),
             status=d.get("status", "draft"), source=d.get("source"),
             tags=d.get("tags", []), legacy_quote=d.get("legacy_quote", {}),
+            effort=d.get("effort", {}),
+            effort_basis=d.get("effort_basis", {}),
+            reuse=d.get("reuse", {}),
+            coauthor_status=d.get("coauthor_status", ""),
+            coauthor_advice=d.get("coauthor_advice", ""),
         )
 
 

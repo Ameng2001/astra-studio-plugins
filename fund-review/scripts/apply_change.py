@@ -181,9 +181,9 @@ def _transform_deploy_sheet(ws, wb_path: str, quote: dict) -> None:
         if not isinstance(unit_price, (int, float)):
             return ""
         if abs(unit_price - 1000) <= 1:
-            return "=集成专业技术人员标准 ¥1000/人天 (表10) ✓"
+            return "符合集成专业技术人员标准 ¥1000/人天 (表10) ✓"
         if abs(unit_price - 2000) <= 1:
-            return "=专家人员标准 ¥2000/人天 (表10) ✓"
+            return "符合专家人员标准 ¥2000/人天 (表10) ✓"
         if 1000 < unit_price < 2000:
             return f"介于集成技术员¥1000~专家¥2000之间 (表10) ✓"
         if unit_price > 2000:

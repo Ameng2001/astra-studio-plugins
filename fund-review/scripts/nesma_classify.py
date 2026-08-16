@@ -137,11 +137,51 @@ def _hits(text: str, keywords: tuple[str, ...]) -> list[str]:
     return out
 
 
-def classify(text: str) -> Verdict:
-    """按 RULES 优先级判定。返回首条命中规则的结论，并记录竞争规则。"""
+def exclusions_from_pack(pack) -> set[str] | None:
+    """本区域标准**授权**启用哪些不计数规则。
+
+    识别规则（表6-表10）三地一致，可以跨区域复用；**不计数规则不行** ——
+    X-SEC/X-MENU/X-INFRA 三条引的都是山东 三.(三)4，柳州与广东全文都没有
+    对应条款，两个包的 `fp_exclusions` 都是空的。此前 `classify()` 无条件
+    应用这三条，等于拿山东的排除清单去删柳州的功能点：
+    「支持 OAuth2.0、SSO、扫码登录、多端统一认证」在柳州本该计数，
+    却被判成不计数 —— 不报错，只是少算了。
+
+    返回 None 表示「包里没写 fp_exclusions」，保持全开的旧行为；
+    返回空集表示「本标准明文没有不计数条款」，一条都不启用。
+    """
+    data = getattr(pack, "data", pack) or {}
+    if "fp_exclusions" not in data:
+        return None
+    entries = data.get("fp_exclusions") or []
+    # 判据是「键在不在」，不是「值真不真」：`rule_id: null` 是**显式声明**
+    # 这条不对应任何文本匹配规则（如「升级改造项目中既有功能不计数」——
+    # 那条按项目类型生效，不看描述文本）。与「忘了标」是两回事。
+    ids = {e["rule_id"] for e in entries
+           if isinstance(e, dict) and e.get("rule_id")}
+    unmapped = [e.get("rule") for e in entries
+                if isinstance(e, dict) and "rule_id" not in e]
+    if unmapped:
+        raise ValueError(
+            f"{data.get('pack_id')}: fp_exclusions 有 {len(unmapped)} 条未标 rule_id —— "
+            f"无法判定它授权了分类器里的哪条不计数规则。"
+            f"全开会误删别省没有的排除项，全关会漏掉本省确有的排除项，"
+            f"两种默认都是错的。请逐条标注：{unmapped[:2]}")
+    return ids
+
+
+def classify(text: str, enabled_exclusions: set[str] | None = None) -> Verdict:
+    """按 RULES 优先级判定。返回首条命中规则的结论，并记录竞争规则。
+
+    `enabled_exclusions` 由 `exclusions_from_pack()` 给出。
+    None = 全部启用（旧行为）；空集 = 一条不启用。
+    """
     text = text or ""
     matched: list[tuple[Rule, list[str]]] = []
     for rule in RULES:
+        if (rule.verdict == "EXCLUDE" and enabled_exclusions is not None
+                and rule.id not in enabled_exclusions):
+            continue
         if any(b in text for b in rule.blockers):
             continue
         hits = _hits(text, rule.keywords)
