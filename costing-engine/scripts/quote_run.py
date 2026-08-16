@@ -37,6 +37,7 @@ HERE = Path(__file__).resolve().parent
 EMITTERS = {
     "liuzhou": "quote_generate_liuzhou.py",
     "guangdong": "quote_generate_guangdong.py",
+    "shandong": "quote_generate_shandong.py",
 }
 
 

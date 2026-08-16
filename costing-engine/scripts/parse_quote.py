@@ -43,7 +43,10 @@ DEVICE_HEADER_HINTS = {"设备名称", "产品名称", "型号", "规格", "参�
 
 def classify_sheet(name: str, header: list[str | None]) -> str:
     hs = " ".join([str(h) for h in header if h])
-    if any(k in name for k in ["汇总", "总表"]) or any(k in hs for k in SUMMARY_HEADER_HINTS):
+    # 「总预算表」是山东附表2 的标准名（附件3），它同样是别处金额的再汇总 ——
+    # 判据漏了它，那张表会被判成 unknown，下游求总额时与各分项表算两遍。
+    if any(k in name for k in ["汇总", "总表", "总预算表"]) \
+            or any(k in hs for k in SUMMARY_HEADER_HINTS):
         return "summary"
     if any(k in hs for k in OPS_HEADER_HINTS):
         return "ops"
