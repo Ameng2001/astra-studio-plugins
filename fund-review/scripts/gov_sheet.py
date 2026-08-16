@@ -337,11 +337,20 @@ class GovSheet:
     _first_data: int = field(init=False, default=0)
     #: 最后一条**明细行**的行号。合计行与说明行不算。
     _last_data: int = field(init=False, default=0)
+    #: 每一条明细行的行号。合计行的 `=SUM()` **只覆盖这些行** ——
+    #: 从前是 `SUM(首行:末行)` 连续区间，一旦中间夹了带小计的分组行，
+    #: Excel 的和就把小计和它的明细各加一遍，而 `expect` 的自验只累加
+    #: `row()` 写入的值，两边量的不是同一个东西，于是**自验通过、表却是双倍**。
+    #: 这正是 P0 那个形状：不报错，只是数错了。
+    _data_rows: list = field(init=False, default_factory=list)
     #: 每列实际写成 input（可试算）的行号。**下拉只挂在这些格子上** ——
     #: 判据不是「是明细行」而是「这一格可试算」，两者不等：04 的费用行也是
     #: 明细行，但它那格写的是「自动」，挂个能改的下拉只会误导。
     _input_rows: dict = field(init=False, default_factory=dict)
     _sums: dict[str, float] = field(init=False, default_factory=dict)
+    #: 待折叠的列组 [(首列名, 末列名, 是否默认折叠)]，由 group_columns() 登记，
+    #: 在 finish() 里统一施加 —— 必须在列宽设完之后，见那里的注释。
+    _col_groups: list = field(init=False, default_factory=list)
     _finished: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
@@ -414,6 +423,18 @@ class GovSheet:
              fill: PatternFill | None = None) -> None:
         where = f"[{self.name}] r{row} 列「{col.name}」"
         v = _check_enum(_scalar(v, where), where)
+        # openpyxl 见到以 = 开头的字符串就写成**公式单元格**，不管你的本意。
+        # 于是「复算式」这种想展示算式的列，打开是算出来的数；
+        # 「= ROUND(人月×单价, 4)」这种备注，打开是 #N/A。
+        # 两种都不报错 —— 又是同一个形状：没有错误，只有错的表。
+        # 要活公式请用 formula()（它会自验）；要展示算式就别以 = 开头。
+        if isinstance(v, str) and not isinstance(v, Formula) and v.lstrip().startswith("="):
+            raise GovSheetError(
+                f"{where}：写了以「=」开头的普通字符串 {v[:60]!r}。\n"
+                f"  openpyxl 会把它写成公式单元格，Excel 打开显示的是**计算结果**"
+                f"（算式里有中文就是 #N/A），不是你想展示的算式文本。\n"
+                f"  要活公式 → 用 gov_sheet.formula(text, computed, engine)，它会自验；\n"
+                f"  要展示算式 → 去掉开头的「=」，或写成「金额 = ROUND(…)」。")
         cl = self.ws.cell(row, idx, v)
         is_todo = isinstance(v, str) and any(m in v for m in TODO_MARKERS)
         cl.font = BOLD_FONT if bold else (TODO_FONT if is_todo else BODY_FONT)
@@ -490,6 +511,7 @@ class GovSheet:
                     self._sums[c.name] = self._sums.get(c.name, 0.0) + v
         self._next += 1
         self._last_data = r
+        self._data_rows.append(r)
         return r
 
     def group(self, label_text: str, values: dict[str, Any] | None = None,
@@ -502,8 +524,12 @@ class GovSheet:
         first = next(c for c in self.columns if c.name != "序号")
         vals.setdefault(first.name, label_text)
         for c in self.columns:
-            self._put(r, c, self._by_name[c.name],
-                      None if c.name == "序号" else vals.get(c.name),
+            # 自动序号时分组行不占号，故清空；**但关掉自动序号（seq=False）时
+            # 「序号」是调用方自己填的内容列**（如甲方模板要求分组行写
+            # 「一」「（一）」），此时一律清空会把它静默吃掉。
+            v = (None if (c.name == "序号" and self.seq)
+                 else vals.get(c.name))
+            self._put(r, c, self._by_name[c.name], v,
                       bold=True, fill=GROUP_FILL)
         self._next += 1
         return r
@@ -527,6 +553,33 @@ class GovSheet:
         """已写明细行数（不含科目行/说明行）。"""
         return self._seq
 
+    def group_columns(self, first: str, last: str, *,
+                      collapsed: bool = True) -> None:
+        """把 `first`…`last` 之间的列折叠成一个可展开的列组。
+
+        用在「明细维度」上：主线之外、需要时才展开的那几列。
+        默认折叠，读表的人先看到主线，点 [+] 再看细节。
+
+        逐列设 outlineLevel/hidden，**不用 openpyxl 的
+        `column_dimensions.group()`** —— 那个会把首列的 dimension 撑成跨列
+        区间并删掉区间内其余列的 dimension，于是组内各列的宽度统一跟首列走。
+        「层次(10) / 计价方法(18) / 推导要点(54)」这种组一折叠，展开后三列
+        全变成 10 宽，而且不报错。Excel 表示列组本来就只需要连续几个 col
+        元素带相同的 outlineLevel，逐列设既保住宽度也是一样的效果。
+        """
+        for n in (first, last):
+            if n not in self._by_name:
+                raise GovSheetError(f"[{self.name}] group_columns 指向未声明的列 {n!r}")
+        i, j = self._by_name[first], self._by_name[last]
+        if j < i:
+            raise GovSheetError(f"[{self.name}] group_columns({first!r}, {last!r}) 顺序反了")
+        if any(i <= x <= j for _, _, x in
+               ((f, l, self._by_name[f]) for f, l, _ in self._col_groups)):
+            raise GovSheetError(
+                f"[{self.name}] 列组 {first}…{last} 与已登记的组重叠；"
+                f"Excel 的列组不支持同级重叠")
+        self._col_groups.append((first, last, collapsed))
+
     # ---- 合计 ----
 
     def total(self, label_text: str = "合计",
@@ -540,14 +593,23 @@ class GovSheet:
         if self._next <= self._first_data:
             raise GovSheetError(f"[{self.name}] 没有数据行，不该写合计")
         r = self._next
-        last = self._next - 1
         label_col = next(c.name for c in self.columns if c.name != "序号")
+        spans = _compress(self._data_rows)
+        if len(spans) > 255:
+            raise GovSheetError(
+                f"[{self.name}] 明细行被分组行切成 {len(spans)} 段，"
+                f"超过 Excel SUM 的 255 个参数上限。"
+                f"改用小计列或减少分组层级 —— 不要退回连续区间，"
+                f"那会把分组小计重复计入。")
         for c in self.columns:
             i = self._by_name[c.name]
             if c.sum:
                 col_l = get_column_letter(i)
-                cl = self.ws.cell(
-                    r, i, f"=SUM({col_l}{self._first_data}:{col_l}{last})")
+                # 只加明细行，跳过分组行与说明行 —— 分组行常带小计，
+                # 连续区间会把小计和它的明细各加一遍。
+                args = ",".join(f"{col_l}{a}" if a == b else f"{col_l}{a}:{col_l}{b}"
+                                for a, b in spans)
+                cl = self.ws.cell(r, i, f"=SUM({args})")
                 cl.number_format = FMT[c.fmt]
                 cl.alignment = RIGHT
             else:
@@ -626,7 +688,35 @@ class GovSheet:
         ps.fitToWidth, ps.fitToHeight = 1, 0
         self.ws.sheet_properties.pageSetUpPr.fitToPage = True
         self.ws.print_title_rows = f"{self.header_row}:{self.header_row}"
+
+        # 列分组放在最后 —— group() 会删掉区间内其余列的 dimension，
+        # 放在设列宽之前的话，后面再设宽会把刚建好的分组拆掉。
+        if self._col_groups:
+            # 汇总列在明细组的**左边**（如「数量」在各园所列之前），
+            # 所以 +/- 按钮要显示在左侧；默认 summaryRight=True 会把按钮
+            # 放到组的右边，点起来对不上。
+            self.ws.sheet_properties.outlinePr.summaryRight = False
+        for first, last, collapsed in self._col_groups:
+            for idx in range(self._by_name[first], self._by_name[last] + 1):
+                cd = self.ws.column_dimensions[get_column_letter(idx)]
+                cd.outline_level = 1
+                cd.hidden = collapsed
         self._finished = True
+
+
+def _compress(rows: list[int]) -> list[tuple[int, int]]:
+    """把行号列表压成连续区间，供 `=SUM(B5:B20,B22:B40)` 用。
+
+    不压缩的话，几百条明细会生成几百个逗号参数 —— Excel 的 SUM 最多 255 个
+    参数，且公式栏里没法读。压缩后通常只有「分组数 + 1」个区间。
+    """
+    out: list[tuple[int, int]] = []
+    for r in sorted(rows):
+        if out and r == out[-1][1] + 1:
+            out[-1] = (out[-1][0], r)
+        else:
+            out.append((r, r))
+    return out
 
 
 def new_workbook():

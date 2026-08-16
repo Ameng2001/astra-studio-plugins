@@ -431,13 +431,13 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
         if not is_fp_counted(i):
             continue
         w = pack.fp_weight(method, i.nesma.type)
-        app_f = pack.factor("app_type", i.app_type or "业务处理")
+        app_f = pack.factor("app_type", engine.app_type_of(i))
         # 复用度按条目的 maturity 经标准包词表解析 —— 不是全表一个值
         lvl = engine.reuse_level(i)
         reuse_f = pack.factor("reuse", lvl)
         afp = engine.profile.adjusted_fp(
             w, pack=pack, counting_method=method,
-            reuse_level=lvl, app_type=i.app_type or "业务处理")
+            reuse_level=lvl, app_type=engine.app_type_of(i))
         # 「复算式」写的是活公式，Excel 会自己算。它算出来的必须等于引擎的
         # 调整后功能点，否则评审点开就看见同一行有两个不一样的数。
         #
@@ -468,7 +468,7 @@ def emit_fp_worksheet(bom: Bom, result: dict[str, Any], pack: StandardPack,
                  "产品成熟度": gov_sheet.label(i.maturity),
                  "复用度档位": lvl, "复用度因子": reuse_f, "应用类型因子": app_f,
                  "调整后功能点": afp,
-                 "复算式": f"=ROUND({w}*{size_f}*{reuse_f}*{app_f},2)",
+                 "复算式": f"ROUND({w}×{size_f}×{reuse_f}×{app_f}, 2)",
                  "交付形态": f"{mode_name}（{mode}）" if mode else mode_name,
                  "计入软件开发费": "是" if counted else "否",
                  "计入开发费功能点": afp if counted else None},
@@ -712,8 +712,11 @@ def emit_pricing_params(wb, result: dict[str, Any], pack: StandardPack,
     # 本项目用到哪些 —— 从条目实际取值统计，**不从 result 里猜键名**。
     # 先前这里读了个不存在的 key，静默得到空集：全表一个「本项目用到」都没标，
     # 而表面上功能是「有」的。
-    used_apps = {(i.app_type or "业务处理") for i in (items or [])
-                 if is_fp_counted(i)}
+    # 不兜底成「业务处理」：兜底会让一个没登记类别的项目在参数表上
+    # 标出「本项目用到 业务处理」，而实际上没人判过。取不到就不算用到，
+    # 全都取不到时由下面那道守卫报错。
+    used_apps = {i.app_type for i in (items or [])
+                 if is_fp_counted(i) and i.app_type}
     if items is not None and not used_apps:
         raise gov_sheet.GovSheetError(
             "算不出本项目用到的应用类型 —— 传了 items 却一个 FP 条目都没有")
@@ -862,7 +865,12 @@ def emit_whatif(wb, result: dict[str, Any], pack: StandardPack, engine,
     for sysrow in result["software_dev"]["systems"]:
         its = [i for i in items if is_fp_counted(i)
                and i.path.system == sysrow["system"]]
-        app_name = (its[0].app_type or "业务处理") if its else "业务处理"
+        # 这个 app_f 进了下面 afp 的乘法，**不设默认值**：
+        # 取不到就报错，不按「业务处理」算过去。
+        app_name = engine.app_type_of(its[0]) if its else None
+        if app_name is None:
+            raise gov_sheet.GovSheetError(
+                f"{sysrow['system']} 在本次范围内没有可计数条目，取不到软件类别")
         app_f = pack.factor("app_type", app_name)
         app_local = pack.factor_label("app_type", app_name)
         dev_f = round(sysrow["man_month_rate"] / base_rate, 4)

@@ -369,7 +369,18 @@ def run_regression(pack: StandardPack) -> list[dict[str, Any]]:
     for case in pack.data.get("regression", []):
         given = case["given"]
         if "fee_id" in given:
-            actual = profile.other_fee(pack, given["fee_id"], given["base_wan"])
+            # 除 fee_id/base_wan 外的键原样转给 profile —— 柳州表11 的算例
+            # 必须带 fee_project_type=机房建设 才能复现 97.6 万；此前框架
+            # 只转前两个参数，那条算例只能按默认项目类型算出别的数。
+            extra = {k: v for k, v in given.items()
+                     if k not in ("fee_id", "base_wan")}
+            try:
+                actual = profile.other_fee(pack, given["fee_id"],
+                                           given["base_wan"], **extra)
+            except TypeError as e:
+                raise PackError(
+                    f"回归用例 {case['id']}：{profile.PROFILE_ID}.other_fee "
+                    f"不接受参数 {sorted(extra)} —— {e}")
         elif "expr" in given:
             # 标准正文自带的推导式，如广东运维服务分册 p.10：
             #   运维功能点单价 = 20000 / 174 × 1.04 = 119.54 元/功能点

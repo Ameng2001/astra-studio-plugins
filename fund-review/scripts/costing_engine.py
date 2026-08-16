@@ -67,6 +67,14 @@ class DealConfig:
     #: 报价里就有一段没有地方标准依据的调整，而清单上看不出来。
     #: 形如 {"id": "gbt36964", "selected": {"开发语言": "JAVA…", ...}, "factors": {...}}
     project_factors: dict[str, Any] | None = None
+    #: 柳州表11/12/13 的**项目类型**（机房建设 / 软件开发 / 系统集成 / 综合类）。
+    #: 与上面的 project_type（新建 / 升级改造）是两个不同的概念，同名会出事：
+    #: 前者决定设计费系数（1.2 / 1.0 / 0.8 / 0.9），后者决定复用度档位。
+    #: 山东、广东无此概念，留 None 即可。
+    fee_project_type: str | None = None
+    #: 按「个/套/系统」计的固定单价费用项的数量，如 {"dengbao_l3": 1}。
+    #: 标准只定单价（10 万元/系统），数量是本项目的事实，只能由 deal 给。
+    fixed_fee_counts: dict[str, int] | None = None
     as_of_bom_version: str | None = None
 
 
@@ -166,6 +174,31 @@ class CostingEngine:
                 rows.append({"因子": name, "取值": v, "选择": choice})
             total *= v
         return xlround(total, 6), rows
+
+    def app_type_of(self, item: BomItem) -> str:
+        """该条目适用的软件类别。**条目 → taxonomy 子系统 → 报错**，不兜底。
+
+        从前四处写着 `i.app_type or "业务处理"`。那个 `or` 是静默兜底：
+        条目没登记类别时按「业务处理」算过去，不报错、不留痕，只留下一个
+        错的因子。柳州四类默认取值都是 1.0，所以今天看不出差别 ——
+        哪天有一类调到 1.2，兜底的那部分就悄悄按 1.0 算了。
+
+        取值的权威层随省份而异：有的省逐条计价（条目上有值就用条目的），
+        柳州按子系统取值（表3 注1「按主体功能的类型取值」，值在 taxonomy）。
+        两处都取不到就报错 —— 「没人判过」不能当成「判过了」。
+        """
+        if item.app_type:
+            return item.app_type
+        sysname = item.path.system
+        for line in (self.bom.taxonomy.get("product_lines") or {}).values():
+            node = ((line or {}).get("systems") or {}).get(sysname)
+            if node and (node or {}).get("app_type"):
+                return node["app_type"]
+        raise ValueError(
+            f"条目 {item.id}（子系统「{sysname}」）取不到软件类别：\n"
+            f"  条目上没有 app_type，bom/taxonomy.yaml 的该子系统节点也没有。\n"
+            f"  软件类别直接乘在金额上，**不设默认值** —— 兜底会让这一段"
+            f"按别的类别计价而清单上看不出来。")
 
     def reuse_level(self, item: BomItem) -> str:
         """本条目适用的复用度档位。
@@ -267,7 +300,7 @@ class CostingEngine:
                 afp += self.profile.adjusted_fp(
                     w, pack=self.pack, counting_method=method,
                     reuse_level=self.reuse_level(i),
-                    app_type=i.app_type or "业务处理")
+                    app_type=self.app_type_of(i))
             afp = xlround(afp, 2)
             effort = self.profile.effort_man_months(afp, pack=self.pack)
             pf_val, _ = self.project_factor()
@@ -500,12 +533,29 @@ class CostingEngine:
                 if not (set(eligible) & dev_categories):
                     blocked = (f"本项目开发类别为 {sorted(dev_categories)}，"
                                f"不属于 {eligible} —— 按标准不单独申报")
-            if blocked or base_yuan <= 0:
+            method = spec["method"]
+            if blocked or (base_yuan <= 0 and method != "fixed"):
                 amount_wan = 0.0
-            elif spec["method"] == "progressive":
+            elif method == "progressive":
                 amount_wan = self.profile.progressive(base_wan, spec["table"])
-            else:
+            elif method == "interpolate":
+                # 柳州表11/12/13：分档直线内插 + 项目类型系数。
+                # 项目类型是**商机决策**（本项目报机房建设还是综合类），
+                # 所以取自 deal.fee_project_type，不是标准包的属性。
+                amount_wan = self.profile.other_fee(
+                    self.pack, spec["id"], base_wan,
+                    fee_project_type=self.deal.fee_project_type)
+            elif method == "fixed":
+                # 等保测评这类「几万元/系统」，数量由 deal 给，标准只定单价
+                n = (self.deal.fixed_fee_counts or {}).get(spec["id"], 0)
+                amount_wan = xlround(spec["fixed_base"] * n, 2)
+            elif method == "rate":
                 amount_wan = xlround(base_wan * spec["max_rate"], 2)
+            else:
+                # 静默兜底就是「不报错、只是数错了」—— 本项目最主要的缺陷形态
+                raise ValueError(
+                    f"{self.pack.pack_id}: 费用项 {spec['id']} 的计费方式 "
+                    f"{method!r} 引擎不认识；已支持 progressive/interpolate/fixed/rate")
             out.append({
                 "id": spec["id"], "name": spec["name"],
                 "base": spec["base"], "base_wan": xlround(base_wan, 4),
@@ -513,15 +563,73 @@ class CostingEngine:
                 "rate": spec.get("max_rate"),
                 # 分档明细：让清单能把「超额累进」摊开成 300×2%+200×1.6%+…
                 # 而不是只写四个字。评审要能自己加出这个数。
-                "breakdown": (self._progressive_steps(base_wan, spec["table"],
-                                                      amount_wan, spec["name"])
-                              if spec["method"] == "progressive" else None),
+                "breakdown": self._fee_breakdown(spec, base_wan, amount_wan),
                 "amount_wan": amount_wan,
                 "amount_yuan": xlround(amount_wan * 10000, 2),
                 "blocked_reason": blocked,
                 "citation": spec.get("citation"),
             })
         return out
+
+    def _fee_breakdown(self, spec: dict[str, Any], base_wan: float,
+                       amount_wan: float) -> list[dict[str, Any]] | None:
+        """把费用算法摊成评审能自己加一遍的几行。
+
+        只写「内插法」或「超额累进」四个字，评审加不出来 —— 加不出来就要问，
+        问了就得现场算，现场算就会算出别的数。
+        """
+        method = spec["method"]
+        if method == "progressive":
+            return self._progressive_steps(base_wan, spec["table"],
+                                           amount_wan, spec["name"])
+        if method == "interpolate":
+            return self._interpolate_steps(spec, base_wan, amount_wan)
+        return None
+
+    def _interpolate_steps(self, spec: dict[str, Any], base_wan: float,
+                           amount_wan: float) -> list[dict[str, Any]]:
+        """分档直线内插的逐步展开，并与引擎总额对账。
+
+        与 `_progressive_steps` 同一条纪律：这里重走了一遍 profile 的算法，
+        所以必须自查 —— 两处分叉时报错，而不是印一个和总额对不上的分解。
+        """
+        prof = self.profile
+        table = spec["table"]
+        first, last = table[0][0], table[-1][0]
+        rows: list[dict[str, Any]] = []
+
+        if base_wan < first:
+            r = spec["below_first_tier"]["rate"]
+            base = base_wan * r
+            rows.append({"步骤": "表下费率", "算式": f"{base_wan:g} × {r:.2%}",
+                         "结果万元": xlround(base, 6)})
+        elif base_wan > last:
+            r = spec["above_last_tier"]["max_rate"]
+            base = base_wan * r
+            rows.append({"步骤": "表上费率", "算式": f"{base_wan:g} × {r:.2%}",
+                         "结果万元": xlround(base, 6)})
+        else:
+            for (a1, b1), (a2, b2) in zip(table, table[1:]):
+                if a1 <= base_wan <= a2:
+                    base = prof.interpolate(base_wan, table)
+                    rows.append({
+                        "步骤": f"内插 [{a1:g}, {a2:g}] 万元",
+                        "算式": (f"{b1:g} + ({base_wan:g}−{a1:g})÷({a2:g}−{a1:g})"
+                                 f"×({b2:g}−{b1:g})"),
+                        "结果万元": base})
+                    break
+
+        factor, why = prof.fee_project_factor(spec, self.deal.fee_project_type,
+                                              spec["id"])
+        rows.append({"步骤": "项目类型系数", "算式": why,
+                     "结果万元": xlround(base * factor, 2)})
+
+        got = rows[-1]["结果万元"]
+        if abs(got - amount_wan) > 0.005:
+            raise ValueError(
+                f"{spec['id']}：内插分解 {got} 与引擎总额 {amount_wan} 对不上 —— "
+                f"两处算法已分叉，先修再出表")
+        return rows
 
     @staticmethod
     def _progressive_steps(base_wan: float, table: list, total_wan: float,

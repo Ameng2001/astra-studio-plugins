@@ -74,12 +74,16 @@ def build(bom: Bom, pack: StandardPack, counting_method: str,
             "size_change": size_f,
             "maturity": i.maturity, "reuse_level": lvl,
             "reuse_factor": pack.factor("reuse", lvl),
-            "app_type": i.app_type, "app_type_local": pack.factor_label("app_type", i.app_type or "业务处理"),
-            "app_factor": pack.factor("app_type", i.app_type or "业务处理"),
+            # 软件类别经 `eng.app_type_of` 解析（条目 → taxonomy 子系统 → 报错）。
+            # 从前这里三处写 `or "业务处理"`：条目没登记就静默按业务处理算，
+            # 而这一列直接乘在 afp 上，基准是要发布的产物。
+            "app_type": i.app_type,
+            "app_type_local": pack.factor_label("app_type", eng.app_type_of(i)),
+            "app_factor": pack.factor("app_type", eng.app_type_of(i)),
             "dev_category": i.dev_category,
             "afp": eng.profile.adjusted_fp(
                 w, pack=pack, counting_method=method,
-                reuse_level=lvl, app_type=i.app_type or "业务处理"),
+                reuse_level=lvl, app_type=eng.app_type_of(i)),
             "placeholder": "placeholder" in i.tags,
         })
 
@@ -251,7 +255,10 @@ def emit_xlsx(bl: dict[str, Any], pack: StandardPack, path: Path) -> None:
                  "应用类型": d["app_type"], "本标准称谓": d["app_type_local"],
                  "应用类型因子": d["app_factor"], "调整后功能点": d["afp"],
                  "占位条目": "是" if d["placeholder"] else "",
-                 "复算式": f'=ROUND({d["ufp"]}*{d["size_change"]}'
+                 # 展示用算式，**不能以「=」开头** —— openpyxl 会把它写成公式
+                 # 单元格，Excel 打开显示计算结果（算式含中文就是 #N/A），
+                 # 而不是要展示的算式文本。同类问题在生成端已修过三处。
+                 "复算式": f'ROUND({d["ufp"]}*{d["size_change"]}'
                            f'*{d["reuse_factor"]}*{d["app_factor"]},2)'})
     # 第二层不做交付形态过滤，所以明细与汇总**必须逐位相等** ——
     # 这正是与第三层的分野：那里两者相差 917.08 FP（订阅形态列而不计），
