@@ -57,6 +57,16 @@ def main() -> None:
     a = ap.parse_args()
 
     root = a.root.resolve()
+    # **root 不能指向 .build 里面。** `--root .` 在 shell 恰好停在中间目录时
+    # 就会这样，而中间目录长得和数据仓一模一样（有 bom/ deals/ standard-packs/），
+    # 所以它**跑得通**：出的表金额还对，只是把上一轮的产物又拷了一遍，
+    # 11 分钟而不是 40 秒。跑得通的错误最难发现，所以这里直接拦。
+    if ".build" in root.parts:
+        raise SystemExit(
+            f"⛔ --root 指向了中间目录：{root}\n"
+            f"  .build/ 是每次重建的脚手架，不是数据仓。"
+            f"数据仓是含 bom/ deals/ standard-packs/ 的那一层，"
+            f"这里应给 {Path(*root.parts[:root.parts.index('.build')])}")
     deal_dir = root / "deals" / a.deal
     deal = yaml.safe_load((deal_dir / "deal.yaml").read_text(encoding="utf-8"))
 
