@@ -1,0 +1,343 @@
+"""lark_worksheet — BOM ↔ 飞书《功能点计算书》双向同步。
+
+与 `lark_bom_sync` 的分工：那个同步的是**质检裁决表**（占位/实体核对/类型裁决），
+这个同步的是**方案人员的工作台** —— 结构对齐行业通用的「功能点计算书」，
+他们直接编辑 BOM 本体，而不是回答我的质检问题。
+
+表结构（对齐《样例表.xlsx》）：
+    子系统 → 一~四级模块 → 功能点计数项名称 → 功能描述
+    → 类别 → UFP(自动) → 应用类型 → 备注 → 条目ID
+
+**这个 Base 地域无关，到 UFP 为止。** `0 参数表` 只放 NESMA 估算功能点法
+权重（GB/T 42588，山东/广东/柳州三地一致引用），没有任何地域系数。
+「应用类型」列存的是**分类名**（智能信息），不是取值 1.5 —— 取值是各省标准
+规定的，属 L1。
+
+调整后功能点 US、复用度、修改类型全部不在这里：US 要乘的规模变更因子、
+应用类型系数是区域标准，复用度与修改类型是交付决策。它们在
+《功能点计算书（<省>）》Base，由 `lark_costsheet.py` 按标准包渲染。
+
+把 1.5 写进 BOM，换省就得改 BOM —— 而 BOM 恰恰是最不该随省份变的东西。
+
+**一个 Base、每个子系统一张表**，外加一张「0 参数表」存权重与系数。
+UFP/US 是跨表引用参数表的公式字段 —— 改系数只改参数表一处，15 张表联动。
+
+为什么不拆成 15 个 Base：拆文件后「本项目一共多少 UFP」要跨文件手工汇总，
+而那正是最容易出错的地方（P0 那 ¥421.6 万就是汇总出的错）。
+单 Base 多表保住了汇总能力，飞书高级权限仍可把角色限定到具体表。
+
+**方向仍不对称**：push 覆盖，pull 只出 diff 报告不改 BOM。
+飞书上的一次误编辑不应该直接改变报价基线。
+
+三件 `lark_bom_sync` 没有处理的事：
+  1. 字段回映射（类别/名称/描述/层级 → BOM 字段）
+  2. **方案人员新增的行** —— 无条目ID，需分配新 id
+  3. 复用度/修改类型属**区域标准与交付决策**，不在这个 Base —— 见 lark_costsheet
+
+用法：
+    python3 lark_worksheet.py push --bom <dir> --config <lark-worksheet.json>
+    python3 lark_worksheet.py pull --bom <dir> --config <...> --out <dir>
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Any
+
+from bom_schema import (FP_COUNTED_CLASSES, Bom, BomItem, Nesma, Path_,
+                        Vocabulary)
+from lark_table import BATCH, LarkTableError, lark, replace_all
+
+#: 样例表用 IFPUG 的 EIF，山东标准用 ELF —— 同一概念，双向映射
+TYPE_TO_SHEET = {"ELF": "EIF"}
+TYPE_FROM_SHEET = {"EIF": "ELF"}
+
+FIELDS = ["子系统", "一级模块", "二级模块", "三级模块", "四级模块",
+          "功能点计数项名称", "功能描述", "类别", "应用类型", "成熟度",
+          "成熟度依据", "备注", "条目ID"]
+
+#: BOM 的 maturity → 表上的中文。这是**产品事实**，不是复用度取值 ——
+#: 复用度因子由各省标准按 maturity 映射（pack.factors.reuse.aliases），
+#: 山东的键是「新建/升级改造_*」，广东是「高/中/低」。同一个 partial，
+#: 两省叫法不同、取值也可能不同，所以 BOM 只存事实不存档位。
+MATURITY_LABEL = {"new": "没有，规划中", "partial": "已有部分/需迭代",
+                  "existing": "已有成熟版本"}
+MATURITY_FROM_LABEL = {v: k for k, v in MATURITY_LABEL.items()}
+
+
+def _row(it: BomItem) -> dict[str, Any]:
+    return {
+        "子系统": it.path.system, "一级模块": it.path.l1 or "",
+        "二级模块": it.path.l2 or "", "三级模块": it.path.l3 or "",
+        "四级模块": it.path.l4 or "",
+        "功能点计数项名称": it.name, "功能描述": it.description or "",
+        "类别": TYPE_TO_SHEET.get(it.nesma.type, it.nesma.type),
+        # 应用类型：**只展示条目真正登记过的值**，不兜底成「业务处理」。
+        # 柳州按子系统取值（表3 注1「按主体功能的类型取值」），权威值在
+        # bom/taxonomy.yaml 的子系统节点，条目上多半是空的 —— 空就显示空，
+        # 兜底会让这张表看起来「每条都判过类别」，而其实一条都没判。
+        "应用类型": it.app_type or "",
+        "成熟度": MATURITY_LABEL.get(it.maturity, it.maturity),
+        "成熟度依据": it.maturity_evidence or "",
+        "备注": "【占位待确认】" if "placeholder" in it.tags else "",
+        "条目ID": it.id,
+    }
+
+
+# ---- push --------------------------------------------------------------
+
+
+def vocab_rows(vocab: Vocabulary) -> list[dict[str, Any]]:
+    """受控词表 → 飞书行。
+
+    词表是 BOM 的一部分（条目能说自己是什么），所以跟条目一起 push；
+    但**它不是参数** —— 参数表里放的是 NESMA 权重那种带取值的东西，
+    词表只有「有哪些合法值、各是什么意思」，一个数字都没有。
+    分两张表，免得有人以为「智能信息」也有个取值藏在这。
+    """
+    out = []
+    for fname, spec in (vocab.fields or {}).items():
+        note = (spec.get("note") or "").strip().replace("\n", " ")
+        for value, meaning in (spec.get("values") or {}).items():
+            out.append({
+                "字段": spec.get("label") or fname,
+                "字段名": fname,
+                "取值": value,
+                "含义": str(meaning).strip(),
+                "填写要求": spec.get("required_when")
+                            or ("必填" if spec.get("required") else ""),
+                "说明": note[:400],
+            })
+    return out
+
+
+def push(bom: Bom, cfg: dict[str, Any]) -> dict[str, Any]:
+    """按子系统分表覆盖写入。参数表不动 —— 它是人维护的。"""
+    bt = cfg["base_token"]
+    by_system: dict[str, list[BomItem]] = defaultdict(list)
+    for i in bom.active():
+        if i.cls in FP_COUNTED_CLASSES and i.nesma:
+            by_system[i.path.system].append(i)
+
+    total, detail = 0, {}
+    for system, items in sorted(by_system.items()):
+        tid = cfg["tables"].get(system)
+        if not tid:
+            detail[system] = "⚠️ 配置中无对应表，跳过"
+            continue
+        try:
+            n = replace_all(bt, tid, [_row(i) for i in items],
+                            label=cfg.get("table_names", {}).get(system, system))
+        except LarkTableError as e:
+            # 整批中止而不是跳过继续 —— 一半表新一半表旧，比整批失败更难查
+            return {"ok": False, "written": total, "error": str(e)}
+        total += n
+        detail[system] = n
+    # 词表随条目一起推 —— 它也是 BOM 的一部分，事实源在 bom/vocabulary.yaml
+    vt = cfg.get("vocab_table")
+    if vt:
+        rows = vocab_rows(Vocabulary.load(bom.root))
+        if rows:
+            try:
+                detail["0 词表"] = replace_all(bt, vt, rows, "0 词表")
+            except LarkTableError as e:
+                return {"ok": False, "written": total, "error": str(e)}
+    return {"ok": True, "written": total, "detail": detail,
+            "bom_version": bom.version}
+
+
+# ---- pull --------------------------------------------------------------
+
+
+def _cell(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, list):
+        return "".join(x.get("text", "") if isinstance(x, dict) else str(x) for x in v)
+    return str(v)
+
+
+def fetch(bt: str, tid: str) -> list[dict[str, str]]:
+    rows, offset = [], 0
+    while True:
+        r = lark("base", "+record-list", "--base-token", bt, "--table-id", tid,
+                 "--as", "user", "--limit", str(BATCH), "--offset", str(offset))
+        if not r.get("ok"):
+            break
+        d = r.get("data") or {}
+        page, hdr = d.get("data", []), d.get("fields", [])
+        rows.extend({k: _cell(v) for k, v in zip(hdr, row)} for row in page)
+        if not d.get("has_more") or not page:
+            break
+        offset += len(page)
+    return rows
+
+
+def _next_id(bom: Bom, system: str, used: set[str]) -> str:
+    """为方案人员新增的行分配 id —— 沿用该子系统已有条目的前缀。"""
+    prefix, mx = None, 0
+    for i in bom.items:
+        if i.path.system == system:
+            p, _, seq = i.id.rpartition(".")
+            if seq.isdigit():
+                prefix = prefix or p
+                if p == prefix:
+                    mx = max(mx, int(seq))
+    if prefix is None:                      # 全新子系统
+        prefix = "FP.NEW"
+        mx = max([int(x.rpartition(".")[2]) for x in used
+                  if x.startswith("FP.NEW.")] or [0])
+    n = mx
+    while True:
+        n += 1
+        cand = f"{prefix}.{n:04d}"
+        if cand not in used:
+            used.add(cand)
+            return cand
+
+
+def pull(bom: Bom, cfg: dict[str, Any], out: Path) -> dict[str, Any]:
+    bt = cfg["base_token"]
+    rows: list[dict[str, str]] = []
+    for system, tid in sorted(cfg["tables"].items()):
+        for r in fetch(bt, tid):
+            r.setdefault("子系统", system)
+            rows.append(r)
+    # 只与「计算书写入范围」比对 —— 硬件等非功能点条目本就不在表里，
+    # 拿它们比会把 30 个硬件误报成「疑删除」
+    by_id = {i.id: i for i in bom.active()
+             if i.cls in FP_COUNTED_CLASSES and i.nesma}
+    used = {i.id for i in bom.items}
+
+    changes: list[dict[str, Any]] = []
+    added: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    stats: Counter = Counter()
+
+    for r in rows:
+        iid = r.get("条目ID", "").strip()
+        sheet_type = r.get("类别", "").strip()
+        btype = TYPE_FROM_SHEET.get(sheet_type, sheet_type)
+
+        if not iid:
+            if not r.get("功能点计数项名称", "").strip():
+                continue
+            new_id = _next_id(bom, r.get("子系统", ""), used)
+            added.append({"new_id": new_id, "系统": r.get("子系统", ""),
+                          "名称": r.get("功能点计数项名称", ""),
+                          "类别": btype, "描述": r.get("功能描述", ""),
+                          "一级模块": r.get("一级模块", ""), "二级模块": r.get("二级模块", ""),
+                          "三级模块": r.get("三级模块", ""), "四级模块": r.get("四级模块", ""),
+                          "备注": r.get("备注", "")})
+            stats["新增条目"] += 1
+            continue
+
+        seen.add(iid)
+        it = by_id.get(iid)
+        if it is None:
+            stats["条目ID 在 BOM 中不存在"] += 1
+            changes.append({"id": iid, "field": "-", "before": "-", "after": "-",
+                            "note": "⚠️ 条目ID 无法匹配到 BOM，可能是已废弃条目或 id 被改动"})
+            continue
+
+        for field, before, after in (
+            ("name", it.name, r.get("功能点计数项名称", "").strip()),
+            ("description", it.description or "", r.get("功能描述", "").strip()),
+            ("nesma.type", it.nesma.type if it.nesma else "", btype),
+            ("path.l1", it.path.l1 or "", r.get("一级模块", "").strip()),
+            ("path.l2", it.path.l2 or "", r.get("二级模块", "").strip()),
+            ("path.l3", it.path.l3 or "", r.get("三级模块", "").strip()),
+            ("path.l4", it.path.l4 or "", r.get("四级模块", "").strip()),
+            ("maturity", it.maturity,
+             MATURITY_FROM_LABEL.get(r.get("成熟度", "").strip(), "")),
+            ("maturity_evidence", it.maturity_evidence or "",
+             r.get("成熟度依据", "").strip()),
+        ):
+            if after and after != before:
+                changes.append({"id": iid, "system": it.path.system, "field": field,
+                                "before": before, "after": after,
+                                "note": ("⚠️ released 条目，pull 不自动覆盖"
+                                         if it.status == "released" else "")})
+                stats[f"改动 {field}"] += 1
+
+    removed = [i for i in by_id if i not in seen]
+    stats["计算书中缺失（疑删除）"] = len(removed)
+
+    out.mkdir(parents=True, exist_ok=True)
+    spec = {"bom_version": bom.version, "changes": changes, "added": added,
+            "removed": removed}
+    (out / "worksheet-changes.json").write_text(
+        json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    L = [f"# 功能点计算书拉取报告 — BOM v{bom.version}", "",
+         f"计算书 {len(rows)} 行　BOM 有效功能点 {len(by_id)} 条", "",
+         "## 概览", ""]
+    for k, n in stats.most_common():
+        if n:
+            L.append(f"- {k}：**{n}**")
+    L += ["", "> 本报告**未修改 BOM**。确认后用 `bom_apply --adjustment WS` 落实，"
+              "由 CHANGELOG 记录版本变更。", ""]
+
+    if added:
+        L += ["## 方案人员新增的功能点", "",
+              "| 建议 id | 子系统 | 名称 | 类别 |", "|---|---|---|---|"]
+        for a in added[:40]:
+            L.append(f"| `{a['new_id']}` | {a['系统']} | {a['名称']} | {a['类别']} |")
+        if len(added) > 40:
+            L.append(f"| … | 其余 {len(added) - 40} 条 | | |")
+        L.append("")
+    if changes:
+        by_field: dict[str, int] = defaultdict(int)
+        for c in changes:
+            by_field[c["field"]] += 1
+        L += ["## 字段改动", "", "| 字段 | 条数 |", "|---|---:|"]
+        for f, n in sorted(by_field.items(), key=lambda kv: -kv[1]):
+            L.append(f"| `{f}` | {n} |")
+        L += ["", "前 30 条：", "", "| 条目ID | 字段 | 原值 | 新值 |", "|---|---|---|---|"]
+        for c in changes[:30]:
+            L.append(f"| `{c['id']}` | {c['field']} | {c['before'][:30]} | "
+                     f"{c['after'][:30]} | {c.get('note', '')}")
+        L.append("")
+    if removed:
+        L += ["## 计算书中缺失的条目", "",
+              f"{len(removed)} 条在 BOM 中存在但计算书里没有。**不自动废弃** —— "
+              f"可能是方案人员删了行，也可能是 push 之后 BOM 又新增了条目。逐条确认：", ""]
+        L += [f"- `{i}`" for i in removed[:30]]
+        if len(removed) > 30:
+            L.append(f"- …其余 {len(removed) - 30} 条")
+        L.append("")
+    (out / "worksheet-pull-report.md").write_text("\n".join(L), encoding="utf-8")
+    return {"rows": len(rows), "stats": dict(stats), "out": str(out)}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="BOM ↔ 飞书功能点计算书")
+    ap.add_argument("direction", choices=["push", "pull"])
+    ap.add_argument("--bom", required=True, type=Path)
+    ap.add_argument("--config", required=True, type=Path)
+    ap.add_argument("--out", type=Path)
+    args = ap.parse_args()
+
+    bom = Bom.load(args.bom)
+    cfg = json.loads(args.config.read_text(encoding="utf-8"))
+
+    if args.direction == "push":
+        r = push(bom, cfg)
+        print(f"push {'成功' if r['ok'] else '失败'}：{r.get('written')} 行"
+              f"（BOM v{bom.version}）")
+        if not r["ok"]:
+            print(f"  错误：{r.get('error')}")
+    else:
+        r = pull(bom, cfg, args.out or (args.bom / "lark-worksheet-pull"))
+        print(f"计算书 {r['rows']} 行")
+        for k, n in r["stats"].items():
+            if n:
+                print(f"  {k}: {n}")
+        print(f"报告 → {r['out']}")
+
+
+if __name__ == "__main__":
+    main()
