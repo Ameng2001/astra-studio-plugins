@@ -75,9 +75,11 @@ def _row(it: BomItem) -> dict[str, Any]:
         "四级模块": it.path.l4 or "",
         "功能点计数项名称": it.name, "功能描述": it.description or "",
         "类别": TYPE_TO_SHEET.get(it.nesma.type, it.nesma.type),
-        # 应用类型是**产品事实**（BOM 的 app_type），系数取值在「0 参数表」里
-        # 按标准规定给。两者分开，换省只改参数表、重新归类只改这一列。
-        "应用类型": it.app_type or "业务处理",
+        # 应用类型：**只展示条目真正登记过的值**，不兜底成「业务处理」。
+        # 柳州按子系统取值（表3 注1「按主体功能的类型取值」），权威值在
+        # bom/taxonomy.yaml 的子系统节点，条目上多半是空的 —— 空就显示空，
+        # 兜底会让这张表看起来「每条都判过类别」，而其实一条都没判。
+        "应用类型": it.app_type or "",
         "成熟度": MATURITY_LABEL.get(it.maturity, it.maturity),
         "成熟度依据": it.maturity_evidence or "",
         "备注": "【占位待确认】" if "placeholder" in it.tags else "",

@@ -113,6 +113,58 @@ def record_ids(bt: str, tid: str) -> list[str]:
             return out
 
 
+def read_rows(bt: str, tid: str, cols: list[str] | None = None) -> list[dict]:
+    """整表读回 `{列名: 值}`，翻页取尽。
+
+    返回体的形状**不是**记录数组：`data.fields` 是列名、`data.data` 是行数组，
+    没有 `records` / `items` 这两个键。按常见形状去取会读回空列表 ——
+    而空列表看起来就像「表里没数据」或「没人改过」，据此去删表就毁数据了。
+    这个函数存在的理由就是别让每处调用各猜一遍。
+    """
+    out: list[dict] = []
+    while True:
+        args = ["base", "+record-list", "--base-token", bt, "--table-id", tid,
+                "--as", "user", "--limit", str(BATCH), "--offset", str(len(out))]
+        for c in (cols or []):
+            args += ["--field-id", c]
+        r = lark(*args)
+        if not r.get("ok"):
+            raise LarkTableError(f"读记录失败 {tid}：{r.get('error')}")
+        d = r.get("data") or {}
+        names, rows = d.get("fields") or [], d.get("data") or []
+        out += [dict(zip(names, row)) for row in rows]
+        if not d.get("has_more") or not rows:
+            return out
+
+
+def read_rows_with_id(bt: str, tid: str, cols: list[str]) -> list[tuple[str, dict]]:
+    """同 `read_rows`，但一并带回 record_id。
+
+    同一次响应里 `record_id_list` 与 `data` 是**平行数组**，靠下标对应。
+    分两次请求去拿的话，中间有人改了表就错位了 —— 而错位的关联指向另一台设备，
+    看起来完全正常。
+    """
+    out: list[tuple[str, dict]] = []
+    while True:
+        args = ["base", "+record-list", "--base-token", bt, "--table-id", tid,
+                "--as", "user", "--limit", str(BATCH), "--offset", str(len(out))]
+        for c in cols:
+            args += ["--field-id", c]
+        r = lark(*args)
+        if not r.get("ok"):
+            raise LarkTableError(f"读记录失败 {tid}：{r.get('error')}")
+        d = r.get("data") or {}
+        names, rows = d.get("fields") or [], d.get("data") or []
+        ids = d.get("record_id_list") or []
+        if len(ids) != len(rows):
+            raise LarkTableError(
+                f"{tid}：record_id_list {len(ids)} 条与 data {len(rows)} 行不等长 —— "
+                f"两个平行数组靠下标对应，不等长时对不上，宁可失败也不能错位")
+        out += list(zip(ids, (dict(zip(names, row)) for row in rows)))
+        if not d.get("has_more") or not rows:
+            return out
+
+
 def _delete(bt: str, tid: str, ids: list[str]) -> None:
     for s in range(0, len(ids), BATCH):
         r = lark("base", "+record-delete", "--base-token", bt, "--table-id", tid,

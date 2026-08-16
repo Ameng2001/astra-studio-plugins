@@ -62,6 +62,11 @@ def _to_row(i) -> dict[str, Any]:
         "标记": "占位待确认" if PLACEHOLDER_TAG in i.tags else "正常",
         "判定理由": (i.nesma.rationale or "") if i.nesma else "",
         "引入版本": i.since,
+        # 共创字段 —— 由 bom_annotate 打上。单选 + 预筛视图 = 可聚合的工作队列，
+        # 比标颜色加批注强的地方在于：能回答「还剩多少条待拆」，且 pull 得回来。
+        "共创状态": i.coauthor_status or "已判型",
+        "处理建议": i.coauthor_advice,
+        "来源特性": i.id.rsplit(".", 1)[0] if i.id.count(".") >= 3 else "",
     }
 
 
@@ -69,6 +74,7 @@ def _to_row(i) -> dict[str, Any]:
 
 #: 各裁决表的「结论」列与未处理值
 DECISION_TABLES = {
+    "C-逻辑文件维护方": ("裁决结论", "未裁决", "数据组"),
     "占位待确认": ("确认结论", "未确认", "条目ID"),
     "C-ILF实体核对": ("核对结论", "未核对", "建议实体名"),
     "F-类型裁决": ("裁决结论", "未裁决", "条目ID"),
