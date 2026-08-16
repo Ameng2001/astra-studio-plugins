@@ -47,6 +47,38 @@ def _run(args: list[str], cwd: Path) -> None:
         raise SystemExit(f"⛔ 失败：{' '.join(str(a) for a in args)}")
 
 
+def _check_pack_sources(root: Path, pack_dir: Path) -> None:
+    """标准包里 source_pdf / source_file 指向的原文必须真的在。
+
+    这些路径是**仓内相对路径**，指向 regional-standards/ 下的标准原件。
+    财评现场问「这个系数出自哪一条」，答案链路是 citation 的页码 + 原文 PDF；
+    页码在 pack 里，PDF 要打得开。
+
+    v2 仓建起来时没带 regional-standards/，七处引用全部悬空了一段时间 ——
+    **不影响出表**（citation 的页码与原句早已摄进 pack.yaml），所以谁都没发现，
+    直到有人真去翻原文。这就是那类「不报错、只是查不动了」的缺陷，故设此关。
+    """
+    def refs(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k in ("source_pdf", "source_file") and isinstance(v, str):
+                    yield v
+                else:
+                    yield from refs(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from refs(v)
+
+    data = yaml.safe_load((pack_dir / "pack.yaml").read_text(encoding="utf-8"))
+    missing = [r for r in refs(data) if not (root / r).exists()]
+    if missing:
+        raise SystemExit(
+            f"⛔ 标准包 {pack_dir.name} 的原文引用悬空 {len(missing)} 处：\n"
+            + "".join(f"    {m}\n" for m in missing)
+            + f"  这些是仓内相对路径，应能在 {root} 下打开。\n"
+            f"  标准原文是 citation 的落地处 —— 页码在 pack 里，PDF 得打得开。")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True, type=Path, help="v2 数据仓根目录")
@@ -102,8 +134,14 @@ def main() -> None:
         want.parent.mkdir(parents=True, exist_ok=True)
         want.symlink_to(real.resolve())
 
+    # 标准原文**软链不拷** —— 27M 只读原件，与 raw-input 同理。
+    rs = root / "regional-standards"
+    if rs.exists():
+        (build / "regional-standards").symlink_to(rs.resolve())
+
     # ---- 3. 基线 ----
     pack_id = Path(deal["baseline"]).name
+    _check_pack_sources(root, root / "standard-packs" / pack_id)
     bl_out = f"baselines/{pack_id}@bom-{ver}"
     print(f"② 基线 {pack_id} × BOM {ver}")
     _run([str(HERE / "baseline_build.py"), "--bom", "bom",
