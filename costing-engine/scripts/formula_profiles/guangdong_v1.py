@@ -200,3 +200,110 @@ def fp_cost(ufp: float, *, pack, app_type: str, settings: dict[str, Any],
             "app_type_basis": cat_basis, "reuse": reuse, "fp": fp_count,
             "productivity": round(prod, 4), "effort_man_months": effort,
             "man_month_rate": rate, "cost": xlround(effort * rate, digits)}
+
+
+# ---- 运维服务费（运维服务分册 5.1 / 5.2）--------------------------------
+
+#: 运维分册表4 的比例系数只覆盖机房侧四类设备。照护终端、体测设备这类
+#: **专业设备不在表内** —— 归不进去时硬失败，不套用 0.05 兜底：套一个
+#: 表里没有的系数，算出来的数看着合理却无条款可引，正是财评一问就塌的形状。
+OPS_HW_CLASSES = ("服务器", "存储设备", "网络设备", "安全设备")
+
+
+def ops_hardware_cost(devices: list[dict], *, pack, digits: int = 2) -> dict:
+    """硬件设备运维服务费 = Σ(硬件设备原值 × 比例系数)（运维分册 5.1.2 表4）。
+
+    `devices` 每项需 {name, ops_class, value}：ops_class 必须是 OPS_HW_CLASSES
+    之一，value 为设备原值（元，口径是采购合同价格）。
+    """
+    node = ((pack.data.get("ops") or {}).get("硬件设备运维") or {})
+    coef = ((node.get("比例系数") or {}).get("values") or {})
+    if not coef:
+        raise ValueError(f"{PROFILE_ID}: 标准包缺 ops.硬件设备运维.比例系数")
+
+    unclassified = [d["name"] for d in devices if d.get("ops_class") not in coef]
+    if unclassified:
+        raise ValueError(
+            f"{PROFILE_ID}: {len(unclassified)} 项设备未归入运维分册表4 的四类"
+            f"（{'/'.join(OPS_HW_CLASSES)}）：{unclassified[:5]}…\n"
+            f"  表4 只覆盖机房侧设备。照护终端、体测设备这类专业设备不在表内，"
+            f"须业务侧裁定归类或另立口径 —— 不套用兜底系数。")
+
+    rows, total = [], 0.0
+    for d in devices:
+        c = coef[d["ops_class"]]
+        if isinstance(c, dict):                    # 存储设备给的是区间
+            raise ValueError(
+                f"{PROFILE_ID}: 「{d['ops_class']}」的比例系数是区间 "
+                f"[{c['min']}, {c['max']}]，须由 deal 显式取值并附依据")
+        amt = xlround(d["value"] * c, digits)
+        rows.append({**d, "coef": c, "amount": amt})
+        total += amt
+    return {"rows": rows, "total": xlround(total, digits)}
+
+
+def ops_software_cost(afp: float, *, pack, level: dict, feature: dict,
+                      direct_non_labor: float = 0.0, digits: int = 2) -> dict:
+    """软件系统运维服务费，方法二「按应用软件运维规模单价」（运维分册 5.2.2）。
+
+        = 调整后功能点数 × 运维功能点单价 × 运维水平要求因素 × 运维系统特征因素
+          + 直接非人力成本
+
+    `level` / `feature` 是**档位名**（不是系数值），逐项查标准的参数表 ——
+    让 deal 里写「用户规模: 小于等于10000」而不是「1.0」，改档位时依据自动跟着走。
+    """
+    sw = ((pack.data.get("ops") or {}).get("软件系统运维") or {})
+    unit = ((sw.get("按规模单价") or {}).get("运维功能点单价"))
+    if unit is None:
+        raise ValueError(f"{PROFILE_ID}: 标准包缺 ops.软件系统运维.按规模单价.运维功能点单价")
+
+    def pick(group: str, key: str, choice: str) -> float:
+        vals = ((sw.get(group) or {}).get(key) or {}).get("values") or {}
+        if choice not in vals:
+            raise ValueError(
+                f"{PROFILE_ID}: {group}.{key} 取值 {choice!r} 不在标准参数表里；"
+                f"可选：{sorted(vals)}")
+        return float(vals[choice])
+
+    lv, ft = 1.0, 1.0
+    lv_detail, ft_detail = {}, {}
+    for k in ("系统更新频率", "支持方式"):
+        v = pick("运维水平要求因素", k, level[k]); lv *= v; lv_detail[k] = (level[k], v)
+    for k in ("部署方式", "业务新颖性", "用户规模", "系统关联性", "业务单位数"):
+        v = pick("运维系统特征因素", k, feature[k]); ft *= v; ft_detail[k] = (feature[k], v)
+
+    lv, ft = xlround(lv, 4), xlround(ft, 4)
+    cost = xlround(afp * unit * lv * ft + direct_non_labor, digits)
+    return {"afp": afp, "unit_price": unit, "level_factor": lv, "feature_factor": ft,
+            "level_detail": lv_detail, "feature_detail": ft_detail,
+            "direct_non_labor": direct_non_labor, "cost": cost}
+
+
+def infra_special_service_fee(purchase: float, *, pack, years: int,
+                              capital_rate: float, annual_ops: float,
+                              digits: int = 2) -> dict:
+    """专业基础设施年服务费（基础设施服务分册 5.3）。
+
+        = [设备采购成本 + Σ(资金成本)] / 分摊年限 + 年设备运行维护费用
+
+    资金成本逐年计算，**基数是上年末尚未收回的设备采购成本** —— 不是采购成本
+    乘年数。按直线分摊，第 k 年（k 从 0 计）未收回额 = 采购成本 ×(1 − k/年限)。
+    """
+    node = ((pack.data.get("infrastructure") or {}).get("专业基础设施服务") or {})
+    floor = ((node.get("分摊年限") or {}).get("计算机设备类最低年限"))
+    if floor and years < floor:
+        raise ValueError(
+            f"{PROFILE_ID}: 分摊年限 {years} 低于标准下限 {floor} 年"
+            f"（计算机设备类，原则上不低于折旧年限）")
+
+    schedule, capital_total = [], 0.0
+    for k in range(years):
+        outstanding = xlround(purchase * (1 - k / years), 2)
+        interest = xlround(outstanding * capital_rate, 2)
+        capital_total += interest
+        schedule.append({"year": k + 1, "outstanding": outstanding, "interest": interest})
+    capital_total = xlround(capital_total, 2)
+    annual = xlround((purchase + capital_total) / years + annual_ops, digits)
+    return {"purchase": purchase, "years": years, "capital_rate": capital_rate,
+            "capital_total": capital_total, "schedule": schedule,
+            "annual_ops": annual_ops, "annual_fee": annual}

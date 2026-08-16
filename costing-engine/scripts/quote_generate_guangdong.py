@@ -184,8 +184,101 @@ def emit_effort_method(wb, effort_systems: list[dict], pack: StandardPack) -> fl
     return total
 
 
+# ---------------------------------------------------------------- 运维 / 基础设施
+
+def _filled(v) -> bool:
+    """「待定」「null」都算没填。**不把没填当成 0** —— 那是本仓反复吃亏的形状。"""
+    return v not in (None, "", "待定", "TBD")
+
+
+def _ops_config(deal_dir: Path) -> dict | None:
+    p = deal_dir / "ops-config.yaml"
+    if not p.exists():
+        return None
+    return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+
+
+def emit_ops_software(wb, pack: StandardPack, prof, cfg: dict, afp: float) -> float:
+    """表3-2 软件系统运行维护服务分项预算表（方法二：按规模单价）。"""
+    r = prof.ops_software_cost(
+        afp, pack=pack, level=cfg["运维水平要求因素"], feature=cfg["运维系统特征因素"],
+        direct_non_labor=float(cfg.get("直接非人力成本") or 0))
+    s = GovSheet(
+        wb, "表3-2 软件系统运维",
+        title="表 3-2：软件系统运行维护服务分项预算表（方法二：按应用软件运维规模单价）",
+        subtitle=f"编制依据：{pack.data.get('doc_no', '')} 运维服务分册 5.2.2；"
+                 f"运维功能点单价 {r['unit_price']} 元/功能点"
+                 f"（软件运维基准人月费率 20,000 / 人月折算 174 × 运维生产率 1.04）；"
+                 f"本标准运维费按一年测算",
+        columns=[
+            Col("项", "text", width=26),
+            Col("取值", "text", width=18),
+            Col("系数", "rate", width=10),
+            Col("依据", "text", width=56),
+        ],
+        seq=False, clause_required=False)
+    s.row({"项": "调整后功能点数", "取值": f"{afp:,.2f}", "系数": None,
+           "依据": "标准要求按验收投运后的实际功能点计；预算阶段取建设期测算值，"
+                   "须在《服务方案》说明"})
+    s.row({"项": "运维功能点单价（元）", "取值": f"{r['unit_price']}", "系数": None,
+           "依据": "运维分册 5.2.2 = 20000/174×1.04"})
+    for grp, detail, tag in (("运维水平要求因素", r["level_detail"], "表5/表6"),
+                             ("运维系统特征因素", r["feature_detail"], "表7–表11")):
+        for k, (choice, val) in detail.items():
+            s.row({"项": f"　{k}", "取值": str(choice), "系数": val,
+                   "依据": f"{grp} · 运维分册 {tag}"})
+    s.row({"项": "运维水平要求因素 小计", "取值": "", "系数": r["level_factor"],
+           "依据": "系统更新频率 × 支持方式"})
+    s.row({"项": "运维系统特征因素 小计", "取值": "", "系数": r["feature_factor"],
+           "依据": "部署方式 × 业务新颖性 × 用户规模 × 系统关联性 × 业务单位数"})
+    s.row({"项": "直接非人力成本（元）", "取值": f"{r['direct_non_labor']:,.2f}",
+           "系数": None, "依据": "一般不计列；计列须说明原因与测算依据（5.2.1 d）"})
+    s.row({"项": "2.2 软件系统运维服务费（元）", "取值": f"{r['cost']:,.2f}",
+           "系数": None, "依据": "功能点数 × 单价 × 水平因素 × 特征因素 + 直接非人力成本"})
+    s.finish()
+    return r["cost"]
+
+
+def emit_infra_calc(wb, pack: StandardPack, prof, cfg: dict,
+                    purchase: float, annual_ops: float) -> float:
+    """4.2 特殊基础设施服务的测算过程。
+
+    **这是一张非标准表。** 广东总则的编报格式到表5 为止，4.2 没有分项表 ——
+    金额直接列在表1，依据写进《服务方案》。这里把逐年资金成本摊开，是为了
+    让《服务方案》有可引用的过程，也让评审能自己加一遍。表头写明它非标准表。
+    """
+    r = prof.infra_special_service_fee(
+        purchase, pack=pack, years=int(cfg["分摊年限"]),
+        capital_rate=float(cfg["资金成本年利率"]), annual_ops=annual_ops)
+    s = GovSheet(
+        wb, "附 4.2 测算过程",
+        title="附：4.2 特殊基础设施服务费 测算过程（非标准表，供《服务方案》引用）",
+        subtitle=f"编制依据：{pack.data.get('doc_no', '')} 基础设施服务分册 5.3；"
+                 f"年服务费 =［设备采购成本 + Σ资金成本］/ 分摊年限 + 年设备运行维护费用；"
+                 f"分摊年限 {r['years']} 年、资金成本年利率 {r['capital_rate']:.2%}",
+        columns=[
+            Col("年度", "text", width=12),
+            Col("上年末未收回采购成本（元）", "money", width=24),
+            Col("当年资金成本（元）", "money", width=20, sum=True),
+        ],
+        seq=False, clause_required=False)
+    for x in r["schedule"]:
+        s.row({"年度": f"第 {x['year']} 年",
+               "上年末未收回采购成本（元）": x["outstanding"],
+               "当年资金成本（元）": x["interest"]})
+    s.total(expect={"当年资金成本（元）": r["capital_total"]})
+    s.note(f"设备采购成本 {r['purchase']:,.2f} 元（取自 device-config.yaml，市场询价口径）")
+    s.note(f"年设备运行维护费用 {r['annual_ops']:,.2f} 元")
+    s.note(f"年服务费 =（{r['purchase']:,.2f} + {r['capital_total']:,.2f}）/ "
+           f"{r['years']} + {r['annual_ops']:,.2f} = {r['annual_fee']:,.2f} 元")
+    s.note("资金成本逐年计算，基数是**上年末尚未收回**的设备采购成本，"
+           "按直线分摊 —— 不是采购成本乘年数（分册 5.3）。")
+    s.finish()
+    return r["annual_fee"]
+
+
 def emit_total(wb, deal: dict, pack: StandardPack, *,
-               fp_yuan: float, effort_yuan: float,
+               money: dict[str, float],
                not_involved: list[str],
                pending: dict[str, str] | None = None) -> float:
     """表1 项目预算总表 —— 五大类 18 子科目，序号与顺序按标准原样。
@@ -211,7 +304,7 @@ def emit_total(wb, deal: dict, pack: StandardPack, *,
             Col("备注", "text", width=60),
         ],
         seq=False, clause_required=False)
-    money = {"1.1": fp_yuan + effort_yuan}
+    money = {k: v for k, v in money.items() if v}
     total = 0.0
     for top in subs:
         # 大类金额 = 其子科目之和；标准的表里大类行也有金额格
@@ -353,14 +446,58 @@ def main() -> None:
                 f"    ⚠ 上面那个数**不能直接填进表**：两地口径不同，直接搬会高估。")
     else:
         ni.append("⚠ 4.2 特殊基础设施服务（硬件）未计列 —— 本商机尚未建 device-config.yaml。")
-    pending["2.1"] = "⚠ 待界定 —— 广东将运维列入预算，本商机运维范围与年限尚未确定"
-    pending["2.2"] = "⚠ 待界定 —— 同 2.1"
-    ni.append("⚠ 2 运行维护服务费未计列 —— 广东将运维列入预算（按一年测算），"
-              "柳州明确不列入建设期预算。本商机的运维范围与年限尚未界定。")
+    # ---- 运维（科目 2）与特殊基础设施（4.2）：能算就算，缺项指名道姓 ----
+    cfg = _ops_config(a.deal.parent)
+    money: dict[str, float] = {"1.1": fp_yuan + eff_yuan}
+
+    if cfg is None:
+        pending["2.1"] = pending["2.2"] = (
+            "⚠ 待计列 —— 本商机尚未建 ops-config.yaml")
+        ni.append("⚠ 2 运行维护服务费未计列 —— 缺 ops-config.yaml。"
+                  "广东将运维列入预算（按一年测算），柳州明确不列入建设期预算。")
+    else:
+        sw = cfg.get("软件运维") or {}
+        need = ([f"软件运维.运维水平要求因素.{k}"
+                 for k in ("系统更新频率", "支持方式")
+                 if not _filled((sw.get("运维水平要求因素") or {}).get(k))]
+                + [f"软件运维.运维系统特征因素.{k}"
+                   for k in ("部署方式", "业务新颖性", "用户规模",
+                             "系统关联性", "业务单位数")
+                   if not _filled((sw.get("运维系统特征因素") or {}).get(k))])
+        if sw.get("enabled") is True and not need:
+            afp = sum(x["fp"] for x in fp_systems)
+            money["2.2"] = emit_ops_software(wb, pack, prof, sw, afp)
+        elif sw.get("enabled") is False:
+            pass                                   # 显式不涉及，走「本商机不涉及」
+        else:
+            pending["2.2"] = ("⚠ 待计列 —— ops-config.yaml 里这些项还是「待定」："
+                              + "、".join(need[:3]) + ("…" if len(need) > 3 else "")
+                              if need else "⚠ 待计列 —— 软件运维 enabled 未定")
+            ni.append("⚠ 2.2 软件系统运维未计列：公式与全部系数标准已给"
+                      "（运维功能点单价 119.54 元/功能点），只差 7 个档位选择，"
+                      "见 ops-config.yaml。")
+
+        infra = cfg.get("基础设施运维") or {}
+        if infra.get("enabled") is False:
+            pass
+        else:
+            pending["2.1"] = ("⚠ 待界定 —— 广东 2.1 指必须保留的**自建机房**基础环境"
+                              "与硬件设备运维，不含政务云。本商机是否有自建机房未定")
+
+    # 4.2 特殊基础设施服务
+    sp = ((cfg or {}).get("特殊基础设施") or {})
+    ops_blocked = ((sp.get("年设备运维费") or {}).get("status") == "阻塞")
+    if hw_purchase and sp.get("enabled") is True and not ops_blocked \
+            and _filled(sp.get("分摊年限")) and _filled(sp.get("资金成本年利率")):
+        money["4.2"] = emit_infra_calc(
+            wb, pack, prof, sp, hw_purchase,
+            float(sp.get("年设备运维费_金额") or 0))
+        pending.pop("4.2", None)
+        ni = [x for x in ni if "4.2" not in x[:8]]
     ni.append("⚠ 本标准未明文规定含税口径与金额取整规则（四册全文已核）——"
               "正式报批前须向省财政厅或采购代理机构确认。")
 
-    total = emit_total(wb, deal, pack, fp_yuan=fp_yuan, effort_yuan=eff_yuan,
+    total = emit_total(wb, deal, pack, money=money,
                        not_involved=ni, pending=pending)
 
     d = deal.get("doc") or {}
@@ -368,10 +505,18 @@ def main() -> None:
           f"{d.get('date', '')}_{d.get('status', '试算版')}.xlsx")
     wb.save(out / fn)
     print(f"广东编报套表 → {out / fn}")
-    print(f"  1.1 定制软件开发服务  {total / 1e4:>12,.2f} 万元")
-    print(f"      功能点法          {fp_yuan / 1e4:>12,.2f} 万元　{len(fp_systems)} 个子系统")
-    print(f"      工作量法          {eff_yuan / 1e4:>12,.2f} 万元　{len(effort_systems)} 个子系统")
-    print(f"  合计                  {total / 1e4:>12,.2f} 万元")
+    # **逐科目打印，不把总额挂在 1.1 名下** —— 接上运维与基础设施之后，
+    # 总额不再等于 1.1，控制台那行若还写「1.1」就是一句假陈述。
+    NAMES = {"1.1": "定制软件开发服务", "2.1": "基础设施运行维护服务",
+             "2.2": "软件系统运行维护服务", "4.2": "特殊基础设施服务"}
+    for no in sorted(money):
+        print(f"  {no} {NAMES.get(no, ''):<16}{money[no] / 1e4:>12,.2f} 万元")
+        if no == "1.1":
+            print(f"      功能点法        {fp_yuan / 1e4:>12,.2f} 万元　"
+                  f"{len(fp_systems)} 个子系统")
+            print(f"      工作量法        {eff_yuan / 1e4:>12,.2f} 万元　"
+                  f"{len(effort_systems)} 个子系统")
+    print(f"  合计                {total / 1e4:>12,.2f} 万元")
     for line in ni:
         print(f"  {line.splitlines()[0]}")
 
