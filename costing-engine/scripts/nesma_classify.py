@@ -70,9 +70,15 @@ RULES: tuple[Rule, ...] = (
          "跨边界的基本过程，对内部逻辑文件执行新增/更改/删除，或改变系统行为",
          ("新增", "新建", "创建", "添加", "录入", "上传", "导入", "上报", "提交",
           "修改", "编辑", "更新", "变更", "删除", "移除", "停用", "启用", "禁用",
-          "配置", "设置", "维护", "审批", "审核", "发起", "绑定", "解绑",
+          "配置", "设置", "维护", "审批", "审核", "发起", "绑定", "解绑", "换绑",
           "派单", "分配", "指派", "发布", "下架", "注册", "注销", "归档",
-          "结算", "支付", "下单", "退单", "签到", "打卡", "标注")),
+          "结算", "支付", "下单", "退单", "签到", "打卡", "标注",
+          # 「登记」是这批清单里最常见的维护动词（台账登记 / 领用登记 /
+          # 检查记录登记），与已有的「录入」「上报」「提交」同类，属表8.1
+          # 「对内部逻辑文件执行新增」。缺它导致柳州幼教 9 行判不出型 ——
+          # 其中 6 行原先靠 D-ILF 命中「台账」误判成 ILF，关掉数据功能规则后
+          # 才暴露出这个缺口。**先误判掩盖了缺失，是这类清单最典型的失效方式。**
+          "登记")),
     Rule("T-EO", "EO", "表9.1 / 表9.3 p.20",
          "向边界外输出，且包含计算或派生数据（与 EQ 的唯一判别点）",
          ("统计", "计算", "汇总", "分析", "占比", "趋势", "预测", "评估", "评分",
@@ -170,15 +176,34 @@ def exclusions_from_pack(pack) -> set[str] | None:
     return ids
 
 
-def classify(text: str, enabled_exclusions: set[str] | None = None) -> Verdict:
+def classify(text: str, enabled_exclusions: set[str] | None = None,
+             *, allow_data: bool = True) -> Verdict:
     """按 RULES 优先级判定。返回首条命中规则的结论，并记录竞争规则。
 
     `enabled_exclusions` 由 `exclusions_from_pack()` 给出。
     None = 全部启用（旧行为）；空集 = 一条不启用。
+
+    `allow_data=False` 关掉 D-ILF / D-ELF，只判事务功能（EI/EO/EQ）。
+    **逐行判型时应当关掉。** 数据功能规则命中的是描述里的名词，而一行
+    功能点描述讲的是**对**那个数据组做什么：
+
+        「支持进行牛奶的收货、验收操作，自动修改库存，进行详细的台账登记」
+          D-ILF 命中「台账」→ 判 ILF（权重 10）
+          实际是表8.1 的 EI —— 对内部逻辑文件执行新增（权重 4）
+
+    实测柳州幼教四张表 1,228 行里有 20 行这样被判成 ILF，虚增 120 UFP；
+    更要紧的是那些台账本身已由 `bom_logical_files.py` 计过一次，
+    等于同一个逻辑文件计了两遍 —— 不报错，只是多算了。
+
+    「园所」这个数据组是不是本子系统维护的，要看跨子系统的全局引用关系，
+    不是读一段描述能定的（见 bom_decompose 模块注释同一条纪律）。所以数据
+    功能的正路是 `bom_logical_files.py`，本函数逐行判型时不该替它下结论。
     """
     text = text or ""
     matched: list[tuple[Rule, list[str]]] = []
     for rule in RULES:
+        if not allow_data and rule.verdict in ("ILF", "ELF"):
+            continue
         if (rule.verdict == "EXCLUDE" and enabled_exclusions is not None
                 and rule.id not in enabled_exclusions):
             continue
