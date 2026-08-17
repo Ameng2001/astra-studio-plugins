@@ -229,6 +229,10 @@ def main() -> None:
         print("dry-run，未写飞书。加 --apply 执行。")
         return
 
+    # **两遍：先把所有表的更新做完，再统一补建。**
+    # 原先是逐表「更新完就补建」，结果 A1 的补建载荷键名写错时抛出，
+    # A2–A4 的更新一行都没做 —— 一张表修好、三张表还是错的，
+    # 而错一半正是这次要修的那个病。修复动作自己不该制造同一种状态。
     for tname, tid, j in plans:
         upd = {rid: cells(it) for rid, it in j["pair"].items()}
         keys = list(upd)
@@ -244,22 +248,35 @@ def main() -> None:
             ig = ((res.get("data") or {}).get("ignored_fields") or [])
             print(f"  {tname:12} 批 {n // BATCH + 1}：{len(chunk)} 行"
                   + (f"　⚠ 被忽略的列 {ig}" if ig else ""))
-        if a.add_missing_lf and j["missing_lf"]:
-            recs = []
-            for it in j["missing_lf"]:
-                p = it.get("path") or {}
-                c = cells(it)
-                c.update({"产品线": p.get("product_line") or "",
-                          "一级功能": p.get("l1") or "", "二级功能": p.get("l2") or "",
-                          "三级功能": p.get("l3") or "", "功能点": it.get("name") or "",
-                          "需求描述": it.get("description") or ""})
-                recs.append({k: v for k, v in c.items() if v not in (None, "")})
-            res = lark("base", "+record-batch-create", "--base-token", bt,
-                       "--table-id", tid, "--as", "user",
-                       "--json", json.dumps({"records": recs}, ensure_ascii=False))
-            if not res.get("ok"):
-                raise SystemExit(f"⛔ {tname} 补建逻辑文件行失败：{res.get('error')}")
-            print(f"  {tname:12} 补建逻辑文件 {len(recs)} 行")
+    for tname, tid, j in plans:
+        if not (a.add_missing_lf and j["missing_lf"]):
+            continue
+        # 补建前先看飞书上有没有 —— 本工具可能被重跑（上一次在这一步失败过），
+        # 不查就会把 30 条逻辑文件再插一遍，而重复的 ILF 每条虚增 10 UFP。
+        have = {_txt(r.get("条目ID")) for r in fetch(bt, tid)}
+        todo = [it for it in j["missing_lf"] if it["id"] not in have]
+        if not todo:
+            print(f"  {tname:12} 逻辑文件已在飞书上，跳过补建")
+            continue
+        recs = []
+        for it in todo:
+            p = it.get("path") or {}
+            c = cells(it)
+            c.update({"产品线": p.get("product_line") or "",
+                      "一级功能": p.get("l1") or "", "二级功能": p.get("l2") or "",
+                      "三级功能": p.get("l3") or "", "功能点": it.get("name") or "",
+                      "需求描述": it.get("description") or ""})
+            recs.append({k: v for k, v in c.items() if v not in (None, "")})
+        # 载荷键是 `create_records`，不是 `records` —— 后者报
+        # "Unrecognized key(s) in object" 并整批不写。
+        res = lark("base", "+record-batch-create", "--base-token", bt,
+                   "--table-id", tid, "--as", "user",
+                   "--json", json.dumps({"create_records": recs},
+                                        ensure_ascii=False))
+        if not res.get("ok"):
+            raise SystemExit(f"⛔ {tname} 补建逻辑文件行失败：{res.get('error')}")
+        print(f"  {tname:12} 补建逻辑文件 {len(recs)} 行")
+
 
     # ---- 写完读回来验 ----
     # 「批量更新不校验 record_id 是否存在」（lark-cli 自己的说明），
