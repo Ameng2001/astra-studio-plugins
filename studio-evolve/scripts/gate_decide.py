@@ -15,7 +15,7 @@
 gate_mode（每条引用 gate-rules.md 条款；1d 系引用 OpsHarness arXiv 2608.25661 §V-C Eqs.9–11 的判定式）
   3d       完整三维：内关卡 g_in = growOK ∧ costOK ∧ strict（§1），外关卡 g_out = growOK ∧ costOK（§2）；
            growOK = 每层 ΔT_k ≥ 0 ∧ ΔS ≥ 0 ∧ ΔW 两分量 ≥ 0；costOK = ΔC ≤ max(β·C(hᵢ), 1)；
-           strict = ∃ΔT_k > 0 ∨ ΔS > 0 ∨ ΔW 某分量 > 0 ∨ ΔC < 0。多骨干时 g_out 每个骨干都过（§2「跨骨干面板」）。
+           strict = ∃ΔT_k > 0 ∨ ΔS > 0 ∨ ΔW 某分量 > 0（v2：ΔC<0 不再算严格改善，只进 costOK）。多骨干时 g_out 每个骨干都过（§2「跨骨干面板」）。
   3d-noT   消融：growOK / strict 里去掉 T 项（S、W、C 保留）。
   3d-noS   消融：去掉 S 项。
   3d-noW   消融：去掉 W 项。
@@ -141,12 +141,12 @@ def judge(d: dict, mode: str, beta: float, outer: bool, delta: float) -> dict:
             growOK = False; reasons.append("长胖回退 " + ",".join(f"{k}({d['dW'][k]:+.3f})" for k in bad)); trig.add("W")
         if any(v > 0 for v in d["dW"].values()):
             strict = True
-    if d["dC"] is not None and d["dC"] < 0:
-        strict = True
+    # v2（2026-10-23 criteria amend）：strict 只认成长轴 T / S / W；ΔC 只进 costOK 约束，不再单独构成「严格改善」
+    # （round 5 P9b：steps 成本把违规规则数计入，「拒绝改放行」永远更便宜，零增长提案曾靠 ΔC<0 过内关卡）。
     if outer:
         strict = True  # §2：外关卡只要求不回退
     elif not strict:
-        reasons.append("无严格改善（strict 不成立）")
+        reasons.append("无严格改善（T / S / W 无一项 > 0；v2 起 ΔC<0 不算）")
     return {"growOK": growOK, "costOK": costOK, "strict": strict, "pass": growOK and costOK and strict,
             "reasons": reasons, "triggered": sorted(trig), "band": band}
 
