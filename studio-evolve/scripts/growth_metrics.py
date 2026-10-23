@@ -146,8 +146,12 @@ def compute(rows: list[dict], theta_tier: float = 0.8) -> dict:
     origins = defaultdict(int)
     for cid, og in {r.get("case"): r.get("origin", "?") for r in orig}.items():
         origins[og] += 1
+    case_pass: dict[str, list[int]] = defaultdict(list)   # 逐案例原题通过率（arm_compare 的 regress_any 用：h_i 全过、h' 有一次不过即单条回退）
+    for r in orig:
+        case_pass[str(r.get("case"))].append(int(r.get("pass") or 0))
     return {
         "n_cases": len({r.get("case") for r in orig}), "n_rows": len(rows), "n_tier": n_tier, "origins": dict(origins),
+        "case_pass": {k: round(sum(v) / len(v), 4) for k, v in sorted(case_pass.items())},
         "T": {f"T_{k}": T[k] for k in (1, 2, 3, 4)}, "T_max": T_max, "A": A,
         "S_consist": S_consist, "S_stable": S_stable, "W_family": W_family, "C": C, "C_gate": C_gate,
         "runs": len(by_run), "n_unscored": len(unscored), "flags": flags,

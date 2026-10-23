@@ -15,14 +15,18 @@
     按协议算（B_{i+1}）：--readings-dir 下有 P{p}-hi-B{r+1}.json 与 P{p}-hp-B{r+1}.json（round r 的提案在 round r+1 留出集上的读数，
     hᵢ 与 Apply(hᵢ,P) 各一份）时，该提案的回退按这对读数算（dA = A(h') − A(hᵢ)，dT_k 同理），不打 REGRESS_ON_SAME_B；
     只有部分提案有下一轮读数时打 REGRESS_MIXED_B。
-  regress_rate(臂) = 臂接受集中 regress=1 的比例；accept_rate(臂) = 接受数 / 提案数。
-  regress_rate_diff = rate(1d) − rate(3d)；regress_rate_ablation_diff = rate(3d-noX) − rate(3d)；
+  单条回退 regress_any(P)（2026-10-23 加，与净口径并排、不进 criteria 判定）：留出集里任一案例在 hᵢ 上原题全过（case_pass = 1）而在
+    Apply(hᵢ,P) 上有一次不过（case_pass < 1）→ 1。用的是同一对读数里的 case_pass（growth_metrics 逐案例原题通过率）；读数没有
+    case_pass 时该提案 regress_any = null 并打 REGRESS_ANY_UNAVAILABLE。净口径会让同层的修对盖住单条改错（round 5 P9c：B_5 上
+    r08 由对变错，被 r73 / r74 修对抵消，净 A +0.025，regress = 0），单条口径看得见。
+  regress_rate(臂) = 臂接受集中 regress=1 的比例；regress_any_rate(臂) 同理按 regress_any；accept_rate(臂) = 接受数 / 提案数。
+  regress_rate_diff = rate(1d) − rate(3d)；regress_any_diff 同理；regress_rate_ablation_diff = rate(3d-noX) − rate(3d)；
   matched_diff = rate(random) − rate(3d)、rate(1d-strict) − rate(3d)（排除「只因为拒得多」）。
   分歧集：1d 接受 ∧ 3d 拒绝 → divergent_regress_rate；3d 接受 ∧ 1d 拒绝 → reverse_divergent_regress_rate。
   reject_share_{T,S,W,C}：3d 臂拒绝的提案按「首个不满足的判定式」归属（顺序 T → S → W → C，偏向 T；另报多维重叠数）。
   区间：按提案联合重采样 --boot 次（两臂接受集不同，不能只在交集配对），每次分别重算两臂比例再做差；百分位 95% CI。
 
-输出 --out-dir/：arms.json（全部数字 + flags）· T1.md（各臂 accept_rate / regress_rate 带 CI）· T2.md（分歧集）·
+输出 --out-dir/：arms.json（全部数字 + flags）· T1.md（各臂 accept_rate / regress_rate / regress_any_rate 带 CI）· T2.md（分歧集，净口径与单条口径并排）·
   T4.md（3d 拒绝的触发维度份额）· metrics.json（record_run.py 可直接读：metrics{…}、n、flags）。
 """
 from __future__ import annotations
@@ -94,6 +98,20 @@ def regress_of(verdict: dict, tiers_n: dict[str, int] | None, tier_min: int, tie
     return (1 if why else 0), why
 
 
+def _reading(readings_dir: Path | None, name: str) -> dict | None:
+    f = (readings_dir / name) if readings_dir else None
+    return json.loads(f.read_text(encoding="utf-8")) if f and f.exists() else None
+
+
+def regress_any_of(hi: dict | None, hp: dict | None) -> tuple[int | None, list[str]]:
+    """单条回退：hᵢ 全过（case_pass==1）而 h' 有一次不过的案例列表；任一读数缺 case_pass → (None, [])。"""
+    a, b = (hi or {}).get("case_pass"), (hp or {}).get("case_pass")
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return None, []
+    broken = sorted(c for c, v in a.items() if float(v) >= 1.0 and c in b and float(b[c]) < 1.0)
+    return (1 if broken else 0), broken
+
+
 def reject_dim(verdict: dict) -> str:
     """3d 拒绝归属：首个不满足的判定式（T → S → W → C）；判不出来记 unknown。"""
     reasons = " ".join(str(x) for j in (verdict.get("inner"), *(verdict.get("outer") or []))
@@ -140,17 +158,23 @@ def main() -> None:
         if nxt is not None:  # 协议口径：在下一轮留出集上判回退
             next_b += 1
             reg, why = regress_of(ref, nxt[1], a.tier_min, a.tier_drop, outer=[nxt[0]])
+            pair = (f"P{key[1]}-hi-B{key[0] + 1}.json", f"P{key[1]}-hp-B{key[0] + 1}.json")
         else:
             same_b += 1
             tiers_n = tier_cases(a.readings_dir, key[1])
             if tiers_n is None:
                 flags.add("TIER_N_UNKNOWN")
             reg, why = regress_of(ref, tiers_n, a.tier_min, a.tier_drop)
+            pair = (f"P{key[1]}-hi-B.json", f"P{key[1]}-hp-B.json")
+        reg_any, broken = regress_any_of(_reading(a.readings_dir, pair[0]), _reading(a.readings_dir, pair[1]))
+        if reg_any is None:
+            flags.add(f"REGRESS_ANY_UNAVAILABLE:{key[1]}")
         accepted = {m: (vs[m].get("decision") == "ACCEPT") for m in modes if m in vs}
         missing = [m for m in modes if m not in vs]
         if missing:
             flags.add("ARM_MISSING:" + ",".join(missing))
         props.append({"round": key[0], "proposal": key[1], "attempt": key[2], "accepted": accepted, "regress": reg, "regress_why": why,
+                      "regress_any": reg_any, "regress_any_cases": broken,
                       "regress_basis": "B_next" if nxt is not None else "B_same",
                       "reject_dim_3d": (None if accepted.get(FULL) else reject_dim(vs[FULL])) if FULL in vs else None,
                       "window": ref.get("window"), "origins": (ref.get("inner") or {}).get("origins")})
@@ -160,12 +184,16 @@ def main() -> None:
         for m in modes:
             acc = [p for p in sample if p["accepted"].get(m)]
             st[m] = {"accept_rate": len(acc) / len(sample) if sample else None, "n_accept": len(acc),
-                     "regress_rate": rate([p["regress"] for p in acc])}
+                     "regress_rate": rate([p["regress"] for p in acc]),
+                     "regress_any_rate": rate([p["regress_any"] for p in acc if p["regress_any"] is not None]),
+                     "n_any_known": sum(1 for p in acc if p["regress_any"] is not None)}
         return st
 
     def diffs(st: dict) -> dict:
         r3, r1 = st[FULL]["regress_rate"], st[ONE_D]["regress_rate"]
         d = {"regress_rate_diff": (r1 - r3) if (r1 is not None and r3 is not None) else None}
+        a3, a1 = st[FULL]["regress_any_rate"], st[ONE_D]["regress_any_rate"]
+        d["regress_any_diff"] = (a1 - a3) if (a1 is not None and a3 is not None) else None
         for m in ("random", "1d-strict", "3d-noT", "3d-noS", "3d-noW"):
             rm = st.get(m, {}).get("regress_rate")
             d[f"{m}_minus_3d"] = (rm - r3) if (rm is not None and r3 is not None) else None
@@ -200,8 +228,12 @@ def main() -> None:
         "n_proposals": len(props), "rounds": sorted({p["round"] for p in props}), "modes": modes,
         "arms": point,
         "diffs": {k: {"value": v, "ci95": ci(boots[k]), "boot": len(boots[k])} for k, v in pdiff.items()},
-        "divergent": {"1d_accept_3d_reject": {"n": len(div_1d_not_3d), "regress_rate": rate([p["regress"] for p in div_1d_not_3d]), "proposals": [p["proposal"] for p in div_1d_not_3d]},
-                      "3d_accept_1d_reject": {"n": len(div_3d_not_1d), "regress_rate": rate([p["regress"] for p in div_3d_not_1d]), "proposals": [p["proposal"] for p in div_3d_not_1d]}},
+        "divergent": {"1d_accept_3d_reject": {"n": len(div_1d_not_3d), "regress_rate": rate([p["regress"] for p in div_1d_not_3d]),
+                                              "regress_any_rate": rate([p["regress_any"] for p in div_1d_not_3d if p["regress_any"] is not None]),
+                                              "proposals": [p["proposal"] for p in div_1d_not_3d]},
+                      "3d_accept_1d_reject": {"n": len(div_3d_not_1d), "regress_rate": rate([p["regress"] for p in div_3d_not_1d]),
+                                              "regress_any_rate": rate([p["regress_any"] for p in div_3d_not_1d if p["regress_any"] is not None]),
+                                              "proposals": [p["proposal"] for p in div_3d_not_1d]}},
         "reject_share_3d": {"n_rejected": len(rejected_3d), **share},
         "n": n_min_arm, "flags": sorted(flags), "seed": a.seed, "boot": a.boot, "tier_min": a.tier_min, "tier_drop": a.tier_drop,
         "proposals": props,
@@ -211,17 +243,19 @@ def main() -> None:
 
     f = lambda x: "—" if x is None else f"{x:.3f}"
     fci = lambda c: "—" if not c else f"[{c[0]:+.3f}, {c[1]:+.3f}]"
-    t1 = ["| 臂 | accept_rate | n_accept | regress_rate |", "|---|---|---|---|"]
-    t1 += [f"| {m} | {f(point[m]['accept_rate'])} | {point[m]['n_accept']} | {f(point[m]['regress_rate'])} |" for m in modes]
+    t1 = ["| 臂 | accept_rate | n_accept | regress_rate（净） | regress_any_rate（单条） | n_any_known |", "|---|---|---|---|---|---|"]
+    t1 += [f"| {m} | {f(point[m]['accept_rate'])} | {point[m]['n_accept']} | {f(point[m]['regress_rate'])} | {f(point[m]['regress_any_rate'])} | {point[m]['n_any_known']} |" for m in modes]
     t1 += ["", "| 差值 | 点估计 | 95% CI（提案联合重采样） |", "|---|---|---|"]
     t1 += [f"| {k} | {f(v['value'])} | {fci(v['ci95'])} |" for k, v in res["diffs"].items()]
-    t1.append(f"\n表 T1：{len(props)} 条提案（round {','.join(map(str, res['rounds']))}），n = min 两臂接受数 = {n_min_arm}；flags = {', '.join(res['flags'])}。")
+    t1.append(f"\n表 T1：{len(props)} 条提案（round {','.join(map(str, res['rounds']))}），n = min 两臂接受数 = {n_min_arm}；flags = {', '.join(res['flags'])}。"
+              f"regress_rate 是 criteria 的净口径（A_holdout / 层 T_k 下降），regress_any_rate 是并排报告的单条口径（任一 hᵢ 全过案例在 h' 失败），不进判定。")
     (a.out_dir / "T1.md").write_text("\n".join(t1) + "\n", encoding="utf-8")
     dv = res["divergent"]
-    t2 = ["| 分歧集 | 条数 | 回退比例 | 提案 |", "|---|---|---|---|",
-          f"| 1d 接受 ∧ 3d 拒绝 | {dv['1d_accept_3d_reject']['n']} | {f(dv['1d_accept_3d_reject']['regress_rate'])} | {', '.join(dv['1d_accept_3d_reject']['proposals']) or '—'} |",
-          f"| 3d 接受 ∧ 1d 拒绝 | {dv['3d_accept_1d_reject']['n']} | {f(dv['3d_accept_1d_reject']['regress_rate'])} | {', '.join(dv['3d_accept_1d_reject']['proposals']) or '—'} |",
-          f"\n表 T2：分歧集；H-1b 要前者 ≥ 0.60、后者 < 0.20。"]
+    anyc = lambda ps: "; ".join(f"{p['proposal']}:{','.join(p['regress_any_cases'])}" for p in ps if p["regress_any_cases"]) or "—"
+    t2 = ["| 分歧集 | 条数 | 回退比例（净） | 回退比例（单条） | 提案 | 单条回退案例 |", "|---|---|---|---|---|---|",
+          f"| 1d 接受 ∧ 3d 拒绝 | {dv['1d_accept_3d_reject']['n']} | {f(dv['1d_accept_3d_reject']['regress_rate'])} | {f(dv['1d_accept_3d_reject']['regress_any_rate'])} | {', '.join(dv['1d_accept_3d_reject']['proposals']) or '—'} | {anyc(div_1d_not_3d)} |",
+          f"| 3d 接受 ∧ 1d 拒绝 | {dv['3d_accept_1d_reject']['n']} | {f(dv['3d_accept_1d_reject']['regress_rate'])} | {f(dv['3d_accept_1d_reject']['regress_any_rate'])} | {', '.join(dv['3d_accept_1d_reject']['proposals']) or '—'} | {anyc(div_3d_not_1d)} |",
+          f"\n表 T2：分歧集；H-1b 要前者 ≥ 0.60、后者 < 0.20（按净口径判；单条口径并排报告）。"]
     (a.out_dir / "T2.md").write_text("\n".join(t2) + "\n", encoding="utf-8")
     rs = res["reject_share_3d"]
     t4 = ["| 维度 | 3d 拒绝归属条数 |", "|---|---|"] + [f"| {d} | {rs[d]} |" for d in ("T", "S", "W", "C", "unknown")]
@@ -230,11 +264,14 @@ def main() -> None:
     metrics = {"metrics": {k: v["value"] for k, v in res["diffs"].items() if v["value"] is not None}, "n": n_min_arm, "flags": res["flags"],
                "ci": {k: v["ci95"] for k, v in res["diffs"].items()}}
     metrics["metrics"].update({f"regress_rate_{m}": point[m]["regress_rate"] for m in modes if point[m]["regress_rate"] is not None})
+    metrics["metrics"].update({f"regress_any_rate_{m}": point[m]["regress_any_rate"] for m in modes if point[m]["regress_any_rate"] is not None})
+    metrics["metrics"]["divergent_regress_any_rate"] = dv["1d_accept_3d_reject"]["regress_any_rate"]
     metrics["metrics"].update({f"accept_rate_{m}": point[m]["accept_rate"] for m in modes})
     metrics["metrics"]["divergent_regress_rate"] = dv["1d_accept_3d_reject"]["regress_rate"]
     (a.out_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"✓ 臂间对比：{len(props)} 条提案 × {len(modes)} 臂 → {a.out_dir}（T1 / T2 / T4 / arms.json / metrics.json）")
     print(f"  regress_rate 3d={f(point[FULL]['regress_rate'])} 1d={f(point[ONE_D]['regress_rate'])} diff={f(pdiff['regress_rate_diff'])} CI {fci(res['diffs']['regress_rate_diff']['ci95'])} · n={n_min_arm} · flags {res['flags']}")
+    print(f"  regress_any_rate 3d={f(point[FULL]['regress_any_rate'])} 1d={f(point[ONE_D]['regress_any_rate'])} diff={f(pdiff['regress_any_diff'])} CI {fci(res['diffs']['regress_any_diff']['ci95'])}（单条口径，不进判定）")
 
 
 if __name__ == "__main__":
