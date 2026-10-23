@@ -27,6 +27,19 @@ pass 判定（对照 case.expect）
   其余 kind（telemetry / advise / clarify / reject）对以上三种 expect 都算 fail（本体没把话接住）。
   路由无录制 / LLM 不可达 → pass=null, flags=[ROUTER_UNAVAILABLE]；引擎抛异常（如 handler 未实现）→ pass=null, flags=[ENGINE_ERROR:<类型>]。
   pass=null 的行不进通过率，由 growth_metrics 单独计数 —— 绝不把「跑不起来」算成通过或失败。
+
+状态前置（case.setup，2026-10-23 加）
+  真实窗口里的裁决常依赖同窗口前序动作写下的状态（前序 commit 的对象、告警、证据包……）。案例可带
+    setup: [{action, params, actor_role?, actor_id?, trace_id?}, …]
+  runner 对这类案例单独起一份新鲜 seed 的 store，按序真 execute 这些步骤（落库），再对口语做 validate / OQL。
+  setup 里任一步被拒或抛错 → 该案例 pass=null, flags=[SETUP_FAILED:<步>]（状态没搭起来就不评判）。没有 setup 的案例仍共用一份只读 seed。
+  make_real_cases.py 把同窗口里该轨迹之前所有非 rejected 的 execute 落成 setup，于是逐案例验证能复现窗口当时的状态。
+
+案例自带路由与禁触规则（case.route / case.expect_not，2026-10-23 加）
+  route: {kind, action, params | oql, confidence}  —— 真实轨迹当时真的走过的意图。带 route 的案例不查 --recordings，
+         其 q 与全部 variants 都按这份意图经同一个 IntentCompiler 校验（同一句口语在 golden 与真实窗口里路由不同时，真实案例以窗口为准）。
+  expect_not: [规则名…]  —— 反馈判定「不该响」的规则（真实轨迹里引擎命中了、业务侧裁定为假阳性）。命中任一条（精确或前缀）即 fail，
+         哪怕 expect 的规则也命中了：rejected(D10) 之外还响了 R51 就是没通过。
 """
 from __future__ import annotations
 
@@ -113,7 +126,7 @@ def rule_hit(target: str, rules: list[str]) -> bool:
     return any(r == target or r.startswith(target + "_") or r.startswith(target) and target[-1:].isdigit() for r in rules)
 
 
-def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, registry, actor, client) -> dict:
+def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, registry, actor, client, expect_not=()) -> dict:
     """路由 + 执行一条话。返回 {pass, kind, actual, steps, tokens, wall_s, flags}。"""
     from clife_onto_engine.query import QueryView
     from clife_onto_engine.query.oql import execute as oql_execute
@@ -143,6 +156,10 @@ def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, regi
                 passed = int(intent.action == target and prev.would_commit)
             elif kind_exp == "rejected":
                 passed = int((not prev.would_commit) and rule_hit(target or "", rules))
+            forbidden = [f for f in (expect_not or ()) if rule_hit(str(f), rules)]
+            if forbidden:
+                passed = 0
+                flags.append("FORBIDDEN_RULE_HIT:" + ",".join(forbidden))
         elif intent.kind == "query":
             steps += 1
             res = oql_execute(intent.oql, QueryView(store, []), registry)
@@ -157,6 +174,20 @@ def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, regi
                 "tokens": tokens, "wall_s": round(time.perf_counter() - t0, 4), "flags": [f"ENGINE_ERROR:{type(e).__name__}"]}
     return {"pass": passed, "kind": intent.kind, "actual": actual, "steps": steps, "tokens": tokens,
             "wall_s": round(time.perf_counter() - t0, 4), "flags": flags}
+
+
+def apply_setup(engine, ontology: str, steps, Actor, default_role: str) -> list[str]:
+    """按序真 execute 案例的 setup 步骤；返回 flags（空 = 全部落库成功）。"""
+    for i, st in enumerate(steps or []):
+        actor = Actor(str(st.get("actor_id") or "evolve-setup"), str(st.get("actor_role") or default_role))
+        try:
+            res = engine.execute(ontology, st["action"], dict(st.get("params") or {}), actor)
+        except Exception as e:  # noqa: BLE001
+            return [f"SETUP_FAILED:{i}:{st.get('action')}:{type(e).__name__}"]
+        decision = getattr(res, "decision", None)
+        if decision not in ("committed", "pending_hil"):
+            return [f"SETUP_FAILED:{i}:{st.get('action')}:{decision or 'rejected'}"]
+    return []
 
 
 def cmd_run(a) -> None:
@@ -197,10 +228,27 @@ def cmd_run(a) -> None:
             base = {"state": a.state, "case": c["id"], "tier": int(c.get("tier", 0)), "family": c.get("family"),
                     "origin": c.get("origin", "real"), "observed_at": str(c.get("observed_at", ""))}
             utterances = [(None, c["q"])] + [(f"{v.get('kind', 'variant')}-{i}", v["q"]) for i, v in enumerate(c.get("variants") or []) if isinstance(v, dict) and v.get("q")]
+            setup = c.get("setup") or []
+            base["setup_steps"] = len(setup)
+            expect_not = tuple(str(x) for x in (c.get("expect_not") or []))
+            c_compiler = compiler
+            if c.get("route"):  # 案例自带真实轨迹的意图：q 与全部 variants 都按它走，不查共享录制
+                from clife_onto_engine.intent.llm import ReplayLLMClient
+                c_compiler = IntentCompiler(ReplayLLMClient({q: c["route"] for _, q in utterances}), registry)
+            c_store, c_engine, setup_flags = store, engine, []
+            if setup:  # 状态前置：这条案例独占一份新鲜 seed，按序真 execute 前序动作后再评判
+                c_store = InMemoryStore()
+                if seeded:
+                    plugin.seed_reference_data(c_store)
+                c_engine = ActionEngine(registry, store=c_store)
+                setup_flags = apply_setup(c_engine, a.ontology, setup, Actor, a.actor_role)
             for run in range(a.repeat):
                 for variant, q in utterances:
-                    r = run_one(q, c["expect"], ontology=a.ontology, compiler=compiler, engine=engine, store=store,
-                                registry=registry, actor=actor, client=client)
+                    if setup_flags:
+                        r = {"pass": None, "kind": None, "actual": "setup-failed", "steps": 0, "tokens": None, "wall_s": 0.0, "flags": list(setup_flags)}
+                    else:
+                        r = run_one(q, c["expect"], ontology=a.ontology, compiler=c_compiler, engine=c_engine, store=c_store,
+                                    registry=registry, actor=actor, client=client, expect_not=expect_not)
                     row = {**base, "variant": variant, "run": run, **r, "q": q, "expect": str(c["expect"])}
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                     rows.append(row)
@@ -257,7 +305,7 @@ def main() -> None:
     r.add_argument("--target-dir", required=True, type=Path, help="编译产物目录（含 __init__.py，如 plugins/glycowise）")
     r.add_argument("--ontology", required=True, help="本体 id（plugin.yaml 的 ontology）")
     r.add_argument("--state", required=True, help="写进结果行的本体状态名（h_i / h_prime）")
-    r.add_argument("--cases-dir", required=True, type=Path)
+    r.add_argument("--cases-dir", required=True, type=Path, help="案例目录（递归读全部 yaml；案例可带 setup 状态前置步骤，见模块说明）")
     r.add_argument("--case-ids"); r.add_argument("--cases-file", type=Path)
     r.add_argument("--repeat", type=int, default=1, help="每条跑几次（config.repeat_runs）")
     r.add_argument("--router", choices=["manual", "live"], default="manual")
