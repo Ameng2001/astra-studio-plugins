@@ -148,8 +148,9 @@ def validate(ws: Path, P: dict) -> tuple[list[str], list[str], list[str]]:
         for k in ("success", "interval", "protocol"):
             if not c.get(k):
                 warnings.append(f"{rid}: 建议写 {k}")
+    known = set(rqs) | {h for r in rqs.values() if isinstance(r, dict) for h in (r.get("hypotheses") or {})}
     for extra in crit:
-        if extra not in rqs:
+        if extra not in known:
             warnings.append(f"criteria.yaml 有 {extra}，rq.yaml 里没有（孤儿判据）")
     return rq_ids, blockers, warnings
 
