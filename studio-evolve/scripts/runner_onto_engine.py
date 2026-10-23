@@ -34,6 +34,7 @@ pass 判定（对照 case.expect）
   runner 对这类案例单独起一份新鲜 seed 的 store，按序真 execute 这些步骤（落库），再对口语做 validate / OQL。
   setup 里某一步被**本状态**拒绝 → 跳过该步继续搭（候选本体把这步历史改写成拒绝，是它的反事实，照常评判），flags=[SETUP_DIVERGED:<步>:<动作>]；
   抛错 → pass=null, flags=[SETUP_FAILED:<步>]（状态没搭起来不评判）。没有 setup 的案例仍共用一份只读 seed。
+  动作或规则抛 NotImplementedError（声明了、实现是桩）→ pass=0, flags=[IMPL_MISSING]：算本体没做到，可评判；其它异常 → pass=null, ENGINE_ERROR。
   make_real_cases.py 把同窗口里该轨迹之前所有非 rejected 的 execute 落成 setup，于是逐案例验证能复现窗口当时的状态。
 
 案例自带路由与禁触规则（case.route / case.expect_not，2026-10-23 加）
@@ -170,6 +171,10 @@ def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, regi
         else:
             actual = f"{intent.kind}" + (f"·{intent.error}" if intent.error else "") + (f"·{intent.question}" if intent.question else "")
             passed = 0
+    except NotImplementedError as e:
+        # 动作 / 规则在本体里有声明但实现是桩（IMPL_MISSING）：这是本体没做到，不是基础设施错误 → 判不通过，可评判
+        return {"pass": 0, "kind": intent.kind, "actual": f"impl-missing:{str(e)[:80]}", "steps": steps,
+                "tokens": tokens, "wall_s": round(time.perf_counter() - t0, 4), "flags": ["IMPL_MISSING"]}
     except Exception as e:
         return {"pass": None, "kind": intent.kind, "actual": f"engine-error:{type(e).__name__}:{str(e)[:80]}", "steps": steps,
                 "tokens": tokens, "wall_s": round(time.perf_counter() - t0, 4), "flags": [f"ENGINE_ERROR:{type(e).__name__}"]}
