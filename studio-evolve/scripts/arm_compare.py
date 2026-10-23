@@ -12,6 +12,9 @@
     协议要求用下一轮留出集 B_{i+1}；verdict 里只有裁决当轮的 B_i，本脚本按 B_i 算并打 REGRESS_ON_SAME_B 旗——这样算出的
     结果只能入探索性（提案在 B_i 上「不回退」本身就是 3d / 1d 外关卡的准入条件，用它判回退对接受臂有利）。
     层样本数从 --readings-dir 的 P{p}-hi-B.json（growth_metrics 的 n_tier / runs）取；没有读数文件则不过滤层样本并打 TIER_N_UNKNOWN。
+    按协议算（B_{i+1}）：--readings-dir 下有 P{p}-hi-B{r+1}.json 与 P{p}-hp-B{r+1}.json（round r 的提案在 round r+1 留出集上的读数，
+    hᵢ 与 Apply(hᵢ,P) 各一份）时，该提案的回退按这对读数算（dA = A(h') − A(hᵢ)，dT_k 同理），不打 REGRESS_ON_SAME_B；
+    只有部分提案有下一轮读数时打 REGRESS_MIXED_B。
   regress_rate(臂) = 臂接受集中 regress=1 的比例；accept_rate(臂) = 接受数 / 提案数。
   regress_rate_diff = rate(1d) − rate(3d)；regress_rate_ablation_diff = rate(3d-noX) − rate(3d)；
   matched_diff = rate(random) − rate(3d)、rate(1d-strict) − rate(3d)（排除「只因为拒得多」）。
@@ -62,10 +65,23 @@ def tier_cases(readings_dir: Path | None, proposal: str) -> dict[str, int] | Non
     return {k: int(v) // runs for k, v in (d.get("n_tier") or {}).items()}
 
 
-def regress_of(verdict: dict, tiers_n: dict[str, int] | None, tier_min: int, tier_drop: float) -> tuple[int, list[str]]:
-    """按 criteria 头注判回退：任一骨干上 A 下降 > 0，或样本够的层 T_k 下降 > tier_drop。"""
+def next_round_deltas(readings_dir: Path | None, proposal: str, rnd: int):
+    """round r 的提案在 B_{r+1} 上的 (deltas, tiers_n)；没有读数对则 None。"""
+    if not readings_dir:
+        return None
+    hi, hp = readings_dir / f"P{proposal}-hi-B{rnd + 1}.json", readings_dir / f"P{proposal}-hp-B{rnd + 1}.json"
+    if not (hi.exists() and hp.exists()):
+        return None
+    a, b = (json.loads(f.read_text(encoding="utf-8")) for f in (hi, hp))
+    dT = {k: (b["T"][k] - a["T"][k]) for k in (a.get("T") or {}) if a["T"].get(k) is not None and (b.get("T") or {}).get(k) is not None}
+    runs = max(1, int(a.get("runs") or 1))
+    return {"backbone": "next", "deltas": {"dA": (b.get("A") or 0) - (a.get("A") or 0), "dT": dT}}, {k: int(v) // runs for k, v in (a.get("n_tier") or {}).items()}
+
+
+def regress_of(verdict: dict, tiers_n: dict[str, int] | None, tier_min: int, tier_drop: float, outer=None) -> tuple[int, list[str]]:
+    """按 criteria 头注判回退：任一骨干上 A 下降 > 0，或样本够的层 T_k 下降 > tier_drop。outer 给定时用它代替 verdict 的外关卡读数。"""
     why = []
-    for o in verdict.get("outer") or []:
+    for o in (outer if outer is not None else (verdict.get("outer") or [])):
         d = o.get("deltas") or {}
         if (d.get("dA") or 0) < 0:
             why.append(f"{o.get('backbone')}:dA={d['dA']:+.3f}")
@@ -108,7 +124,8 @@ def main() -> None:
     streams = load_verdicts(a.verdicts_dir, rounds)
     if not streams:
         sys.exit("没有 verdict 文件")
-    flags = {"REGRESS_ON_SAME_B"}
+    flags: set[str] = set()
+    same_b = next_b = 0
     modes = sorted({m for v in streams.values() for m in v}, key=lambda m: (ARM_ORDER.index(m) if m in ARM_ORDER else 99, m))
     for need in (FULL, ONE_D):
         if need not in modes:
@@ -119,15 +136,22 @@ def main() -> None:
     for key in sorted(streams):
         vs = streams[key]
         ref = vs.get(FULL) or next(iter(vs.values()))
-        tiers_n = tier_cases(a.readings_dir, key[1])
-        if tiers_n is None:
-            flags.add("TIER_N_UNKNOWN")
-        reg, why = regress_of(ref, tiers_n, a.tier_min, a.tier_drop)
+        nxt = next_round_deltas(a.readings_dir, key[1], key[0])
+        if nxt is not None:  # 协议口径：在下一轮留出集上判回退
+            next_b += 1
+            reg, why = regress_of(ref, nxt[1], a.tier_min, a.tier_drop, outer=[nxt[0]])
+        else:
+            same_b += 1
+            tiers_n = tier_cases(a.readings_dir, key[1])
+            if tiers_n is None:
+                flags.add("TIER_N_UNKNOWN")
+            reg, why = regress_of(ref, tiers_n, a.tier_min, a.tier_drop)
         accepted = {m: (vs[m].get("decision") == "ACCEPT") for m in modes if m in vs}
         missing = [m for m in modes if m not in vs]
         if missing:
             flags.add("ARM_MISSING:" + ",".join(missing))
         props.append({"round": key[0], "proposal": key[1], "attempt": key[2], "accepted": accepted, "regress": reg, "regress_why": why,
+                      "regress_basis": "B_next" if nxt is not None else "B_same",
                       "reject_dim_3d": (None if accepted.get(FULL) else reject_dim(vs[FULL])) if FULL in vs else None,
                       "window": ref.get("window"), "origins": (ref.get("inner") or {}).get("origins")})
 
@@ -147,6 +171,10 @@ def main() -> None:
             d[f"{m}_minus_3d"] = (rm - r3) if (rm is not None and r3 is not None) else None
         return d
 
+    if same_b and next_b:
+        flags.add("REGRESS_MIXED_B")
+    elif same_b:
+        flags.add("REGRESS_ON_SAME_B")
     point = arm_stats(props)
     pdiff = diffs(point)
     rng = random.Random(a.seed)
