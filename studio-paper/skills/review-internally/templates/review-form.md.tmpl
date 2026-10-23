@@ -1,0 +1,36 @@
+# 内审评审表 —— {{reviewer}} · internal-{{pass}}
+
+> 稿件：`{{draft_path}}` · 会议家族：{{venue_family}}（{{venue_name}} {{venue_year}}）
+> 字段以当年 CFP 评审表为准；CFP 不可得时按 references/review-forms/{{venue_family}}-conference.md 回退。
+> 写入：`.studio-paper/{{paper_id}}/review/internal-{{pass}}/{{reviewer}}.md`
+
+## Summary
+用你自己的话复述论文：问题、方法、主结果（3–5 句）。复述不出的地方本身就是一条 weakness。
+
+## Strengths
+- …
+
+## Weaknesses
+<!-- 一条一行；行尾必须标 [fatal] 或 [fixable]，可选 「→ 稿中位置」（§ / 表号 / 行号）。
+     fatal / fixable 分级见 references/review-forms/ 的「fatal 与 fixable」表。
+     fixable 写明「一周内能补的实验 / 修订是什么」。compose_verdict.py 只读本节。 -->
+- 主结果表缺最直接的近邻基线 X，只在 related work 引用 [fatal] → §5 表 T2
+- 「significantly」没有检验或区间，只有均值 [fixable] → §5.1 第 2 段
+
+## Questions for authors
+1. …
+
+## Limitations / 威胁有效性
+作者陈述是诚实的还是装饰性的？漏了哪条？
+
+## Scores
+- soundness: ?/4
+- presentation: ?/4
+- contribution: ?/4
+- overall: ?   <!-- se: accept | weak accept | major revision | weak reject | reject；ml: 1–10 -->
+
+## Confidence
+- confidence: ?/5   <!-- 你对这份评审的把握 -->
+
+## Top-1 拒稿理由
+一句话：如果我要拒这篇，第一条理由是什么？论文先答了吗？

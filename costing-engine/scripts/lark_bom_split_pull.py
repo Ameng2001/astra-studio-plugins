@@ -95,6 +95,17 @@ def pull(bom: Bom, cfg: dict, out: Path) -> dict[str, Any]:
         for r in list_all(bt, tid):
             iid = _txt(r.get("条目ID"))
             if not iid:
+                # **不能 continue。** 无 id 的行是飞书侧**新增**的条目，
+                # 而本模块整篇都在按 id 对齐 —— 跳过它等于报告里一个字都不出现。
+                # 2026-08-17 幼教四张表被维护人重拆，新增 647 行全部无 id，
+                # 这里静静跳过了全部 647 行，pull 报告显示「飞书侧无改动」。
+                # 不报错、不留痕，只是看不见 —— 落实要走 bom_ingest_lark_rows。
+                stats["飞书新增·无ID"] += 1
+                changes.append({"表": name, "条目ID": "（无）", "字段": "-",
+                                "本地": "（本地无此条目）",
+                                "飞书": _txt(r.get("功能点")),
+                                "飞书全文": _txt(r.get("需求描述")),
+                                "类型": "新增行"})
                 continue
             seen_ids.add(iid)
             it = by_id.get(iid)
@@ -174,6 +185,29 @@ def pull(bom: Bom, cfg: dict, out: Path) -> dict[str, Any]:
                 changes.append({"表": name, "条目ID": iid, "字段": STATUS_FIELD,
                                 "本地": it.coauthor_status or "已判型",
                                 "飞书": st, "类型": "状态"})
+
+    # ---- `条目ID` 列失真硬关 ----------------------------------------
+    # 本模块整篇按 id 对齐，**前提是那一列还压在原来的行上**。飞书侧重排或
+    # 重拆时，`条目ID` 是留在原行位置的普通文本列，会整列压到毫不相干的行上：
+    # 本地 FP.PSC.OPS.1001 叫「用户活跃指标」，飞书同 id 的行变成了
+    # 「用户运营看板查询」。此时 diff 会产出一批**看起来完全正常**的「改写」，
+    # write_back 再把它们写进 BOM —— 581 条描述配错条目，且全程不报错。
+    # 这正是 ARCHITECTURE 第 98 行记的那次事故，所以设成硬关而非告警。
+    bad = [c for c in changes
+           if c["类型"] == "改写" and c["字段"] == "需求描述"
+           and c["条目ID"] in by_id
+           and _txt(c["飞书"])[:12] not in (by_id[c["条目ID"]].description or "")]
+    rewrites = [c for c in changes if c["类型"] == "改写" and c["字段"] == "需求描述"]
+    if rewrites and len(bad) / len(rewrites) > 0.8:
+        raise SystemExit(
+            f"⛔ `条目ID` 列疑似整列失真：{len(rewrites)} 条描述改写里有 "
+            f"{len(bad)} 条与本地条目毫不相干（>80%）。\n"
+            f"  这不是共创改写，是飞书侧重排/重拆后 id 列压到了别的行上。\n"
+            f"  按 id 回写会把描述整批配错条目，且不报错 —— 故此处中止。\n"
+            f"  重拆场景请走 `bom_ingest_lark_rows.py`：它按 (一级/二级/三级功能)\n"
+            f"  分组挂锚，不信 id 列。示例："
+            + "".join(f"\n    {c['条目ID']} 本地「{(by_id[c['条目ID']].description or '')[:24]}…」"
+                      f"→ 飞书「{c['飞书'][:24]}…」" for c in bad[:3]))
 
     missing = sorted(set(by_id) - seen_ids)
     decisions: dict[str, Any] = {}

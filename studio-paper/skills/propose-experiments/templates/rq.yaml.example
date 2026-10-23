@@ -1,0 +1,19 @@
+# proposal/rq.yaml —— RQ-n / H-n 编号是全链路外键（台账 rq / hypothesis、评审、回应表都引用它）
+# 形状约定（保持「按 id 嵌套的 map + 行内列表」，read_yaml_lite 能读）：
+#   rqs.<RQ-n>.question      一句话问题
+#   rqs.<RQ-n>.thesis_part   挂论点句的哪一部分（原文短语）
+#   rqs.<RQ-n>.hypotheses.<H-na>.statement / direction / metric
+# 不要用「- id: ...」这种列表套 map；值里不要出现「 #」。
+
+paper: evolving-foundation
+thesis_ref: positioning/thesis.md
+
+rqs:
+  RQ-1:
+    question: "本体在闭环自生长中，各难度层（tier）的验证通过率是否随轮次持续上升？"
+    thesis_part: "自生长本体能在不人工改写规则的前提下持续提升覆盖能力"
+    hypotheses:
+      H-1a:
+        statement: "第 20 轮相对第 0 轮，tier-3 通过率 T_tier3 提升至少 0.10，且 tier-1/2 不下降超过 0.02"
+        direction: increase
+        metric: T_tier3

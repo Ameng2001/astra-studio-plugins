@@ -1,0 +1,35 @@
+# studio-evolve 运行时配置 —— .studio-evolve/{{ontology_id}}/config.yaml
+# git 跟踪；阈值在一次进化过程中固定，改阈值要开新的 growth-ledger。
+
+ontology_id: {{ontology_id}}
+target_dir: {{target_dir}}            # 编译产物（clife-onto-engine 插件）落点
+
+# 闸门参数（见 references/gate-rules.md §4）
+window_size: 20          # 一个进化窗口的轨迹数，也是留出集默认大小
+beta: 0.05               # 成本容忍带
+theta_tier: 0.8          # 某层算「稳定通过」的阈值（只用于报告 T）
+repeat_runs: 3           # 算 S_stable 的重复次数
+max_attempts: 3          # 单提案最多尝试次数
+stratify: [family, tier, time_half]
+backbones: [default]     # 多于一个时启用跨骨干闸门
+
+# 归因参数（见 references/proposal-schema.md §4）
+rho: 0.6                 # 正轨迹共性固化阈值
+
+# 仿真派生数量上限（每个要素）
+simulate:
+  per_rule: 2
+  per_action: 2
+  per_link: 1
+  per_function: 1
+  variants_per_case: 3
+
+# 轨迹来源：audit_log（引擎审计，首选）| session（会话轨迹，精度降级）
+trajectory_source:
+  kind: audit_log
+  path: {{trajectory_path}}
+
+# 数据源（evolve-ground 探测用，只读）
+sources:
+  - store: {{store}}
+    dsn: {{dsn}}

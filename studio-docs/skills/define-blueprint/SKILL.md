@@ -30,8 +30,9 @@ The following blueprints ship with studio-docs:
 | `bid-document.yaml` | 投标文件 | response | 3大部分 |
 | `construction-plan.yaml` | 建设方案 | implementation | 9+附录 |
 | `acceptance-package.yaml` | 验收材料 | delivery | 9+附件 |
+| `academic-paper.yaml` | 学术论文（CS 会议） | publication | 8+附录 |
 
-These blueprints cover the typical lifecycle of a government IT project — from initiation through delivery.
+The first seven cover the typical lifecycle of a government IT project — from initiation through delivery. `academic-paper` is different in kind: its `artifact_sources` are not studio planning artifacts but the files of an **evidence pack** (`artifact_root`, by default `.studio-paper/{paper-id}/results/evidence-pack`), and its compliance rules forbid any number that is not in that pack.
 
 ## Workflow
 

@@ -1,0 +1,50 @@
+# Astra Studio Configuration
+# This file is created by /studio-core:init and lives at studio/config.yaml
+# It is git-tracked — shared across the team.
+
+# Development schema
+schema: plugin-first
+
+# Default settings for new plugin workspaces
+defaults:
+  # Where to promote plugins (relative to project root)
+  target_collection: .
+  # Default governance metadata
+  governance:
+    risk_level: low
+    review_status: draft
+
+# Plugin development lifecycle
+lifecycle:
+  # Phases a plugin passes through
+  phases:
+    - planning      # brief.md written, skills being decomposed
+    - building      # SKILL.md files being authored and tested
+    - testing       # all skills tested, plugin-level validation
+    - approved      # validation passed, ready to promote
+    - shipped       # promoted to target, design docs snapshotted (not removed)
+  # Phase required before promote is allowed
+  promote_requires: approved
+  # Snapshot design docs to studio/archive/ on promote (originals stay active)
+  archive_on_promote: true
+
+# Runtime workspace defaults (for generated plugins with 'stateful' trait)
+runtime:
+  # Convention: .{plugin-name}/ at project root
+  workspace_pattern: ".{plugin-name}"
+  # Whether runtime workspace should be git-tracked
+  git_track: true
+
+# Human-in-the-loop defaults (for generated plugins with 'hil-gated' trait)
+hil:
+  # Whether approval is required before promotion
+  require_approval: false
+  # Whether to record approval decisions in status.json
+  record_decisions: true
+
+# Expert scope defaults (for generated plugins with 'expert-scoped' trait)
+experts:
+  # Labels for distinguishing expert phases
+  scope_labels:
+    - planning    # experts used during studio planning (stay in studio-insight or studio/agents/)
+    - runtime     # experts used during plugin operation (ship with plugin in agents/)

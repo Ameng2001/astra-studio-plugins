@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "arxiv": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["arxiv-mcp-server", "--storage-path", "${HOME}/.arxiv-mcp-server/papers"],
+      "_doc": "blazickjp/arxiv-mcp-server（Apache-2.0，PyPI arxiv-mcp-server）：按章节读 arXiv 原始 LaTeX、从 arXiv 元数据出 BibTeX、主题订阅。position-paper 的差异表「原文出处」从这里来。需要 uv。"
+    },
+    "paper-search": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["paper-search-mcp"],
+      "env": {
+        "PAPER_SEARCH_MCP_UNPAYWALL_EMAIL": "${PAPER_SEARCH_MCP_UNPAYWALL_EMAIL}",
+        "PAPER_SEARCH_MCP_SEMANTIC_SCHOLAR_API_KEY": "${PAPER_SEARCH_MCP_SEMANTIC_SCHOLAR_API_KEY}"
+      },
+      "_doc": "openags/paper-search-mcp（MIT）：arXiv / Semantic Scholar / OpenAlex / Crossref / dblp / OpenReview / CORE 多源检索与去重，OA 优先下载。两个 env 可选，留空也能用。Sci-Hub 连接器在上游只能按调用关闭（download_with_fallback 的 use_scihub 默认 false，另有 download_scihub 工具）：本插件用 hooks/block_scihub.py 在 PreToolUse 硬拦，SKILL.md 也写明禁用。"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+# 基线清单与公平性预算
+
+record-run `--kind baseline` 按 `指标` 列匹配本表，算复现偏差（容忍度 `config.thresholds.baseline_deviation_tol`）。
+
+| 方法 | 指标 | 原论文数值 | 出处 | 调参预算 | 重试次数 | 硬件 |
+|---|---|---|---|---|---|---|
+| EvoOntology | T_tier3 | 0.62 | arXiv 2609.15779 Tab.3 | 20 trials | 3 | 同本方法 |
+| OpsHarness | T_tier3 | 0.59 | arXiv 2608.25661 Tab.2 | 20 trials | 3 | 同本方法 |
+| 静态本体（不进化） | T_tier3 | — | 本文冷启动 round 0 | — | — | 同本方法 |
+
+本方法的预算 / 重试 / 硬件写在 `config.yaml` 或此表末行并排；预算比超过 `baseline_budget_ratio_max` 时 freeze-results 告警。

@@ -1,0 +1,189 @@
+name: academic-paper
+display_name: "学术论文（CS 会议）"
+version: "1.0"
+lifecycle_stage: publication
+description: "面向 ICSE / FSE / ASE / NeurIPS 类会议的论文初稿。输入不是 studio 规划产物，而是 studio-paper 冻结后的证据包：每个数字必须能回指证据包里的表或 run_id，声称强度不得超过证据。"
+
+# 证据包目录（由 studio-paper 的 freeze-results 产出；本 blueprint 只认目录约定，不感知产出它的插件）
+artifact_root: ".studio-paper/{paper-id}/results/evidence-pack"
+
+structure:
+  - chapter: "Abstract"
+    required: true
+    sections:
+      - "问题与缺口（两句）"
+      - "方法（一句）"
+      - "主结果（带数字与表号）"
+      - "可获得性（artifact 链接占位）"
+    artifact_sources:
+      - "thesis.md"
+      - "coverage.md"
+      - "tables/"
+    word_count: "150-250 words"
+    guidelines: "最后写。贡献用一句可证伪的话表述，与 thesis.md 一致。主结果只引用 tables/ 里出现过的数字并标表号。不出现 first / novel / significantly 等声称词，除非正文已给比较对象与区间。"
+
+  - chapter: "1 Introduction"
+    required: true
+    sections:
+      - "背景与问题"
+      - "现有工作的缺口（指向 nearest-diff.md 的差异）"
+      - "一句话论点"
+      - "贡献列表（每条指向一个表号或图号）"
+      - "论文组织"
+    artifact_sources:
+      - "thesis.md"
+      - "nearest-diff.md"
+      - "claims-skeleton.md"
+      - "coverage.md"
+    word_count: "800-1200 words"
+    guidelines: "论点句原文照搬 thesis.md，不改措辞。贡献列表每条形如「我们证明 X（表 Tn / 图 Fn）」；claims-skeleton.md 里没有对应行的贡献不得写。缺口描述必须能在 nearest-diff.md 找到对应差异行。"
+
+  - chapter: "2 Background and Nearest Work"
+    required: true
+    sections:
+      - "问题设定与术语"
+      - "最近邻工作逐一对照（他们做了什么 / 我们多做了什么）"
+      - "差异为何值得一篇论文"
+    artifact_sources:
+      - "nearest-diff.md"
+      - "rq.yaml"
+    word_count: "800-1200 words"
+    guidelines: "三篇最近邻各一段，内容来自 nearest-diff.md 的对应行，差异附原文出处。只引用不对比的工作放到 Related Work，不放这里。nearest-diff.md 里标 UNVERIFIED 的条目不得引用。"
+
+  - chapter: "3 Approach"
+    required: true
+    sections:
+      - "总体框架（mermaid 图）"
+      - "各组件设计"
+      - "与 RQ 的对应（哪个组件回答哪个 RQ）"
+    artifact_sources:
+      - "thesis.md"
+      - "rq.yaml"
+    word_count: "1500-2500 words"
+    guidelines: "方法描述以回答 RQ 为目的组织：每个组件说明它服务于 rq.yaml 中的哪个 RQ。设计细节可写，但不得在此出现任何实验数字。"
+
+  - chapter: "4 Experimental Setup"
+    required: true
+    sections:
+      - "研究问题（RQ 列表与假设，原文来自 rq.yaml）"
+      - "数据集与划分、污染声明"
+      - "基线与公平性预算"
+      - "评测协议、样本量与区间、随机种子"
+      - "实现与环境"
+    artifact_sources:
+      - "rq.yaml"
+      - "coverage.md"
+      - "exploratory.md"
+    word_count: "1000-1500 words"
+    guidelines: "RQ 与假设逐字引用 rq.yaml。污染声明写明每个评测集与被测模型预训练 / 微调数据的关系（已知重叠 / 未知 / 已排除）。基线一节并排列出预算、调参空间、种子数、硬件。coverage.md 中「被排除的 run」必须在此或结果章披露并给理由。"
+
+  - chapter: "5 Results"
+    required: true
+    sections:
+      - "RQ-1 结果（一小节一个 RQ，按 rq.yaml 顺序）"
+      - "RQ-n 结果"
+      - "结果小结（每个 RQ 一句：支持 / 证伪 / 待定）"
+    artifact_sources:
+      - "tables/"
+      - "figures/"
+      - "coverage.md"
+      - "claims-skeleton.md"
+    word_count: "1500-3000 words"
+    guidelines: "每个 RQ 小节：先放表（原样复制 tables/{RQ}.md 的表与 caption，caption 必须脱离正文可读），再解读。解读中的每个数字必须出现在该表中；比较性结论必须带比较对象和区间或多种子方差。待定的 RQ 如实写待定，不得把探索性结果写成主结果。"
+
+  - chapter: "6 Threats to Validity"
+    required: true
+    sections:
+      - "内部效度（混杂、污染、挑窗挑种子）"
+      - "外部效度（数据集、骨干、领域范围）"
+      - "构念效度（指标是否度量了所声称的能力）"
+      - "已知局限与未解决问题"
+    artifact_sources:
+      - "coverage.md"
+      - "exploratory.md"
+      - "rq.yaml"
+    word_count: "500-800 words"
+    guidelines: "不是装饰章节。coverage.md 的提示项、被排除 run、探索性结果各对应一条威胁。每条威胁写明已做的缓解与未缓解的部分。"
+
+  - chapter: "7 Related Work"
+    required: true
+    sections:
+      - "按主题分组的相关工作"
+      - "与本文的关系"
+    artifact_sources:
+      - "nearest-diff.md"
+    word_count: "600-1000 words"
+    guidelines: "最近邻三篇已在第 2 章对比，这里只简述其余工作。每篇引用需有可核查的来源；证据包外的文献由作者补充并标 [待核查]。"
+
+  - chapter: "8 Conclusion"
+    required: true
+    sections:
+      - "回答论点句"
+      - "各 RQ 结论一句话"
+      - "未来工作"
+    artifact_sources:
+      - "thesis.md"
+      - "coverage.md"
+    word_count: "250-400 words"
+    guidelines: "结论强度与第 5 章一致，不得在此加强。未来工作可以指向探索性结果，但要标明其探索性。"
+
+  - chapter: "Appendix"
+    required: false
+    sections:
+      - "探索性结果（标明 exploratory，不入主结论）"
+      - "完整 run 清单与排除理由"
+      - "复现说明（artifact、命令、环境）"
+    artifact_sources:
+      - "exploratory.md"
+      - "coverage.md"
+      - "freeze.lock"
+    word_count: "500-1500 words"
+    guidelines: "探索性结果只能出现在这里，且每张表的 caption 以「探索性」开头。freeze.lock 的哈希与时间戳写入复现说明，便于审稿人核对版本。"
+
+compliance:
+  - "每个量化 claim（含数字、百分号、倍数的句子）必须带表号（表 Tn / 图 Fn）或 run_id（r-YYYY-MM-DD-nnnn）"
+  - "声称词 first / novel / significantly / state-of-the-art / outperforms / 首次 / 显著 / 优于 必须附比较对象与区间（或统计检验）；缺一不可"
+  - "正文中的每个数字必须出现在 tables/ 或 coverage.md 中；证据包之外的数字一律不得出现，缺数据写 [待补充：XXX]"
+  - "探索性结果（exploratory.md）只能出现在附录，且标明探索性"
+  - "RQ 与假设的表述逐字引用 rq.yaml；论点句逐字引用 thesis.md"
+  - "nearest-diff.md 标 UNVERIFIED 的文献不得引用"
+  - "被排除的 run（coverage.md）必须在正文或附录披露并给理由"
+  - "每张表 / 图的 caption 脱离正文可读（含 n、seeds、区间口径）"
+  - "Threats to Validity 必须覆盖内部、外部、构念三类，且与 coverage.md 的提示项对应"
+
+style_rules:
+  numbering: "1→1.1→1.1.1（Abstract / Appendix 不编号）"
+  paragraph_length: "80-150 words（中文 150-300 字）"
+  tone: "academic"
+  language: "en-US（可在 doc plan 指定 zh-CN；中英混排时术语首次出现给英文）"
+  voice: "主动语态优先（We show…）；描述协议与实验设置时可用被动语态；不用第一人称单数"
+  claim_discipline: "先给证据再下结论；形容词让位于数字；比较性结论必须说明和谁比、差多少、区间多宽"
+  required_elements:
+    - "一句话论点（与 thesis.md 一致）"
+    - "贡献列表（每条指向表号 / 图号）"
+    - "mermaid 总体框架图"
+    - "RQ 列表与假设"
+    - "每个 RQ 一张结果表（来自 tables/）"
+    - "污染声明"
+    - "基线公平性对照表"
+    - "Threats to Validity 三类"
+
+export:
+  formats: ["markdown", "docx"]
+  page_size: A4
+  margins:
+    top: 2.54cm
+    bottom: 2.54cm
+    left: 2.54cm
+    right: 2.54cm
+  fonts:
+    title: { name: "Times New Roman", size: 17pt }
+    heading1: { name: "Times New Roman", size: 12pt }
+    heading2: { name: "Times New Roman", size: 11pt }
+    heading3: { name: "Times New Roman", size: 10pt }
+    body: { name: "Times New Roman", size: 10pt }
+    table: { name: "Times New Roman", size: 9pt }
+  line_spacing: 1.0
+  header: ""
+  footer: "page_number"
+  note: "投稿用会议 LaTeX 模板由作者套用；本导出是内审与导师批注用的可读稿。"

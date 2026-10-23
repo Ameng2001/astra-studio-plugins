@@ -145,7 +145,9 @@ For each chapter in the blueprint:
    - Collect `brief.md` and `skill-map.md` from each plugin
    - These chapters typically need sub-task splitting based on plugin count
 
-4. **Document inheritance**: If the blueprint has `inherits_from` (e.g., 建设方案 inherits from 可研):
+4. **Evidence-pack blueprints**: If the blueprint declares a top-level `artifact_root` (e.g. `academic-paper.yaml`), skip the studio mapping above and resolve every `artifact_sources` entry relative to that directory after substituting `{paper-id}` (ask the user for it, or take the only subdirectory of `.studio-paper/`). An entry ending in `/` is a directory — include all files in it. A missing file is a **requires-input** gap, never derivable: these blueprints forbid numbers from anywhere else.
+
+5. **Document inheritance**: If the blueprint has `inherits_from` (e.g., 建设方案 inherits from 可研):
    - Check if the previous document exists: `docs/{domain}/{previous_display_name}.md`
    - If found, add it as an artifact reference for chapters that overlap (e.g., "项目概述" can reference the 可研 version)
 
