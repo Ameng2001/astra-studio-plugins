@@ -1,0 +1,34 @@
+# Proposal {{n}}: {{一句话假设}}
+
+- ontology_id: {{ontology_id}}
+- round: {{round}}
+- attempt: {{1}}
+- window: {{window}}
+- source_cases: [{{case_id}}, …]
+- deficit_type: {{MISSING_OBJECT | WRONG_LINK | MISSING_FUNCTION | STALE_RULE | MISSING_GUARD | WRONG_MAPPING | MISLEADING_SIGNAL}}
+- hypothesis: {{修掉这个缺陷后，哪些案例应从 fail 变 pass，为什么；若来自正轨迹共性，写出现比例 ≥ ρ}}
+- expected_effect: { T: {{哪一层}}, S: {{哪些变体}}, W: {{证据率 / 场景覆盖}} }
+- failure_signature_checked: {{yes, clean | yes, HIT …}}
+- pairing: {{PAIRED | UNPAIRED}}
+
+## Divergence（分歧点）
+| case | step | agent_intent | ground_truth | deviation |
+|------|------|--------------|--------------|-----------|
+| {{id}} | {{k}} | {{这一步想做什么}} | {{真实答案要求做什么}} | {{差在哪}} |
+
+## Edits（原子编辑，每个 ω 一节，payload 是 IR 对应段的一行）
+### ω1 · {{add|update|delete}} {{OBJECT|LINK|FUNCTION|RULE|ACTION|MAPPING|CQ|EVIDENCE}}
+| … |
+
+## Risk
+- 可能伤到的 family / tier：{{…}}
+- 是否改变已通过案例的路径：{{…}}
+
+## Evolver Review
+（由 ontology-evolver 回填）
+
+## Verdict
+- inner: {{PASS | FAIL}}（读数见 growth-ledger round {{r}}）
+- outer: {{PASS | FAIL}}
+- decision: {{ACCEPT | REVISE | REJECT}}
+- execution: {{MANUAL | AUTO}}

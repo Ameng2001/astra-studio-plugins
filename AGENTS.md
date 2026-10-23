@@ -14,6 +14,7 @@ Toolchain plugins (`studio-*`) — the studio itself:
 ├── studio-platform/     # Platform documentation generator (brainmap, agent mapping, tech designs, visualization) — 6 skills
 ├── studio-design/       # Design-to-code (screenshot → Pencil → OpenSpec → code) — 3 skills
 ├── studio-ontology/     # FDE pipeline — compile business analysis into a clife-onto-engine ontology — 3 skills
+├── studio-evolve/       # Self-evolving ontology — ground / simulate / attribute / verify (dual gate, 3 growth axes) — 4 skills
 ```
 
 Vertical plugins — built *with* the toolchain, shipped from the same marketplace:
@@ -32,6 +33,7 @@ studio-docs      (depends on studio-core; consumes artifacts from studio-planner
 studio-platform  (depends on studio-core; consumes artifacts from studio-planner + studio-insight)
 studio-design    (zero deps; needs the Pencil MCP server for .pen files)
 studio-ontology  (depends on studio-core; targets the clife-onto-engine runtime)
+studio-evolve    (depends on studio-core + studio-ontology; needs clife-onto-engine to run the gate; stateful: .studio-evolve/{ontology_id}/)
 fund-review      (zero plugin deps; needs Python with openpyxl + python-docx)
 ```
 
@@ -55,7 +57,7 @@ plugin-name/
 
 ## Key Files
 
-- `.claude-plugin/marketplace.json`: Marketplace manifest — registers all 9 plugins with source paths
+- `.claude-plugin/marketplace.json`: Marketplace manifest — registers all 10 plugins with source paths
 - `.claude-plugin/plugin.json`: Root-level marketplace metadata
 - `*/plugin.json`: Per-plugin metadata — name, description, version, dependencies
 - `commands/*.md`: Slash commands invoked as `/plugin:command-name`

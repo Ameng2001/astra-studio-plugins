@@ -1,0 +1,21 @@
+# 一条 CQ 案例 —— .studio-evolve/{ontology_id}/cases/{real|sim}/{family}-{n}.yaml
+# 字段定义见 references/growth-metrics.md「案例的扩展字段」。label 私有，不进任何提示词。
+
+id: {{family}}-{{n}}
+q: "{{问题或动作调用}}"
+expect: {{query | action(动作名) | rejected(规则名)}}
+tier: {{1|2|3|4}}
+family: {{场景类别}}
+origin: {{real | sim}}
+observed_at: {{YYYY-MM-DD}}        # real：轨迹发生时间；sim：生成时间（用于 time_half 分层）
+elements: [{{涉及的本体元素名}}]
+label:                              # 私有
+  answer: "{{真实答案 / 真实根因 / 应被哪条规则回滚}}"
+  source: {{feedback | simulate}}
+variants:
+  - q: "{{同义改写}}"
+    kind: paraphrase
+  - q: "{{换成 §8 采样里的另一个真实实例}}"
+    kind: entity_swap
+  - q: "{{多给一个无关参数}}"
+    kind: irrelevant_field

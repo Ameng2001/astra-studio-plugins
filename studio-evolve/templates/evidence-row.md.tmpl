@@ -1,0 +1,10 @@
+# IR §8 Evidence（证据）— 由 evolve-ground 追加到 ontology-map.md 末尾
+
+> 每条对象 / 映射 / function-backed 规则 / 有连接路径的关系一行。`probe` 必须是只读查询，可重放；`sample` 是采样摘要不是全量。
+> `status`：`verified` 探测全过 · `mismatch` 存在但与声明不一致（写明差异，交人裁定） · `missing` 探测不到 · `unreachable` 数据源不可达。
+
+## 8. Evidence（证据）— compiles to 不编译；供 ontology-validate 治理审计与 evolve-* 的 W_evid 计算
+
+| element | kind | probe | sample | status | verified_at |
+|---------|------|-------|--------|--------|-------------|
+| {{Site}} | OBJECT | {{SELECT parcel_id, area_mu, region, site_type FROM geo_parcel LIMIT 20}} | {{20 行；site_type ∈ {沙地,盐碱,矿山}；area_mu 3–480，空值 0}} | {{mismatch: 声明含 草原，数据未出现}} | {{YYYY-MM-DD}} |

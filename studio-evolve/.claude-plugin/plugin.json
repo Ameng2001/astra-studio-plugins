@@ -1,0 +1,15 @@
+{
+  "name": "studio-evolve",
+  "version": "0.1.0",
+  "description": "Self-evolving ontology pipeline — grow a compiled clife-onto-engine ontology from its own runtime trajectories. Four stages after studio-ontology: ground (anchor every IR entry to a probe query over real data), simulate (derive labelled competency cases from rules / actions / links), attribute (locate the divergence point of failed trajectories and attribute it to a five-element deficit, emitting atomic IR edit proposals), verify (dual-gate sandbox check on source cases + resampled held-out cases, scored on three growth axes: taller / sturdier / wider). Accepted proposals re-enter ontology-compile in modify mode; nothing is merged without passing both gates and a human look.",
+  "author": {
+    "name": "VanLengs",
+    "url": "https://github.com/VanLengs"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["ontology", "self-evolving", "harness", "oag", "clife-onto-engine", "root-cause-attribution", "dual-gate", "competency-questions"],
+  "dependencies": ["studio-core", "studio-ontology"],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "agents": "./agents/"
+}
