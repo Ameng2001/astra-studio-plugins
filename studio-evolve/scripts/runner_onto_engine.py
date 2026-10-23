@@ -46,7 +46,8 @@ pass 判定（对照 case.expect）
 落库状态断言（case.expect_state，2026-10-23 加，round 5 P9 暴露：根因修法与朴素修法在 commit / 规则名上逐行相同，差别只在写了什么）
   expect_state: [{type: GlucoseReading, key: r-P0045-dup1, fields: {quality_flag: superseded, superseded_by: r-P0045-01343}}, …]
   对 validate 预演里 handler 暂存（stage_write）的对象断言：同 (type, key) 以最后一次写入为准；fields 里每个字段都要相等（值为 null 表示该字段
-  必须缺失或为 None）。对象没暂存 → fail，flags=[STATE_MISSING:<type>/<key>]；字段不符 → fail，flags=[STATE_MISMATCH:<type>/<key>.<field>=<实际>]。
+  必须缺失或为 None）。键带时间戳 / 当日日期的对象用 key_prefix 代替 key（前缀匹配，多条命中取最后一次写入，标记里写成 <prefix>*）。
+  对象没暂存 → fail，flags=[STATE_MISSING:<type>/<key>]；字段不符 → fail，flags=[STATE_MISMATCH:<type>/<key>.<field>=<实际>]。
   只在 expect 为 action(X) 且预演 would_commit 时评估（拒绝的动作本来就不写）。引擎的 ActionPreview.staged 只给 (type, key)，预演结束 overlay.clear()
   会把暂存数据清掉，所以 runner 在 engine._new_ctx 外包一层，用会先快照再清空的 overlay 列表拿到数据（依赖引擎私有接口 _new_ctx / ActionContext.overlay；
   接口不在时 expect_state 行 pass=null，flags=[STATE_UNSUPPORTED]）。
@@ -190,8 +191,15 @@ def check_state(expect_state, holder) -> list[str]:
         return ["STATE_UNSUPPORTED"]
     objs = staged_objects(holder)
     for es in expect_state or []:
-        t, k = str(es.get("type")), str(es.get("key"))
-        d = objs.get((t, k))
+        t = str(es.get("type"))
+        if es.get("key") is None and es.get("key_prefix") is not None:
+            # 键里带时间戳 / 当日日期的对象（grp-{pid}-{now}、draft-{pid}-{window_end}…）按前缀匹配；多条命中取最后一次写入
+            k = f"{es['key_prefix']}*"
+            hits = [kk for (tt, kk) in objs if tt == t and kk.startswith(str(es["key_prefix"]))]
+            d = objs[(t, hits[-1])] if hits else None
+        else:
+            k = str(es.get("key"))
+            d = objs.get((t, k))
         if d is None:
             bad.append(f"STATE_MISSING:{t}/{k}")
             continue

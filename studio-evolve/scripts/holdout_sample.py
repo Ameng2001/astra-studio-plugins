@@ -11,6 +11,8 @@
      每层至少 1 条，其余名额按层大小比例分配；总量 = --holdout-size（与 window_size 解耦：论文判据用 100）。
   3. 写 cases/holdout/{round}.yaml，只记 id 与分层键；标签不进任何提示词。
   4. 候选池不够每层 1 条、或总量不足 → 报 HOLDOUT_THIN，按实际可抽执行，不用 sim 补。
+  5. --merge-min N（协议 v3，2026-10-23）：分层后样本 < N 的层并入同 family 的「其余 tier」层（tier 键记为 rest），
+     --stratify 此时应为 family,tier；--check-pool 只做前置复核不抽样：打印并层后每层样本数，池 ≥ 2×holdout_size 且每层 ≥ N 才 ✓（exit 0），否则 exit 3。
   每轮重抽（seed 建议 = round 或 config 指定），同一轮只抽一次：输出文件已存在则拒绝覆盖。
 """
 from __future__ import annotations
@@ -77,6 +79,8 @@ def main() -> None:
     ap.add_argument("--out", type=Path, help="默认 {cases-dir}/holdout/{round}.yaml")
     ap.add_argument("--ledger", type=Path, help="growth-ledger.md：追加「留出集记录」一行")
     ap.add_argument("--force", action="store_true", help="允许覆盖已存在的留出集文件（违反「每轮只抽一次」，仅调试用）")
+    ap.add_argument("--merge-min", type=int, default=0, help="协议 v3：样本 < N 的层并入同 family 的 rest 层；0 = 不并层")
+    ap.add_argument("--check-pool", action="store_true", help="只复核正式 run 前置（池 ≥ 2×holdout_size 且并层后每层 ≥ merge-min），不抽样、不写文件")
     a = ap.parse_args()
 
     real_dir = a.cases_dir / "real"
@@ -97,6 +101,32 @@ def main() -> None:
     strata: dict[tuple, list[str]] = defaultdict(list)
     for cid, c in sorted(pool.items()):
         strata[strat_key(c, dims, median)].append(cid)
+    merged_note = []
+    if a.merge_min > 0:
+        if dims[:1] != ["family"]:
+            sys.exit("--merge-min 要求 --stratify 以 family 开头（协议 v3：family × tier，<N 并入同 family 的 rest 层）")
+        small = [k for k, v in strata.items() if len(v) < a.merge_min]
+        for k in small:
+            rest = (k[0],) + ("rest",) * (len(k) - 1)
+            strata[rest].extend(strata.pop(k))
+            merged_note.append(f"{'×'.join(k)}→{'×'.join(rest)}")
+        for k in list(strata):
+            strata[k].sort()
+    if a.check_pool:
+        need_pool = 2 * a.holdout_size
+        print(f"real-pool 前置复核：池 {len(pool)}（排除 Dᵢ {len(excl)}），分层 {', '.join(dims)}，并层阈值 {a.merge_min}，层数 {len(strata)}")
+        if merged_note:
+            print("  并层：" + "；".join(merged_note))
+        thin_layers = []
+        for k in sorted(strata, key=lambda k: (k[0], str(k[1:]))):
+            n = len(strata[k]); mark = "" if n >= a.merge_min else "  ← 不足"
+            print(f"  {'×'.join(k):<28} {n:>4}{mark}")
+            if n < a.merge_min:
+                thin_layers.append(k)
+        ok = len(pool) >= need_pool and not thin_layers
+        print(f"{'✓' if ok else '✗'} 池 {len(pool)} {'≥' if len(pool) >= need_pool else '<'} {need_pool}；并层后不足 {a.merge_min} 的层 {len(thin_layers)} 个"
+              + (f"：{'；'.join('×'.join(k) for k in thin_layers)}" if thin_layers else ""))
+        sys.exit(0 if ok else 3)
     quota, warn = allocate(strata, a.holdout_size)
     rng = random.Random(a.round if a.seed is None else a.seed)
     picked: list[tuple[str, tuple]] = []
@@ -113,7 +143,7 @@ def main() -> None:
     lines = [f"# 留出集 round {a.round} —— 只记 id 与分层键；标签私有，不进任何提示词",
              f"round: {a.round}", f"seed: {a.round if a.seed is None else a.seed}", f"size: {len(picked)}",
              f"target_size: {a.holdout_size}", f"strata: {len([k for k in quota if quota[k] > 0])}",
-             f"stratify: [{', '.join(dims)}]", f"median_observed_at: {median or 'null'}",
+             f"stratify: [{', '.join(dims)}]", f"merge_min: {a.merge_min}", f"median_observed_at: {median or 'null'}",
              f"excluded: {len(excl)}", f"pool: {len(pool)}", f"thin: {'true' if thin else 'false'}",
              "ids:"] + [f"  - {cid}" for cid, _ in picked] + ["strata_of:"] + \
             [f"  {cid}: [{', '.join(k)}]" for cid, k in picked]
