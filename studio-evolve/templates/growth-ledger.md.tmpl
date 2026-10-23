@@ -1,13 +1,13 @@
 # Growth Ledger — {{ontology_id}}
 
 > 每轮裁决一行。阈值见 `config.yaml`（β={{beta}}，window={{window_size}}，骨干={{backbones}}）。
-> MANUAL 与 AUTO 的读数不混比；改阈值要开新账本。
+> MANUAL 与 AUTO 的读数不混比；改阈值要开新账本。`exec` 由 `scripts/gate_decide.py` 写为 `AUTO/{SINGLE_BACKBONE|PANEL}`，`script_hash` 是三个脚本的联合哈希，`gate_mode` 是裁决用的判定模式（3d 为正式；其余是论文对照臂）。
 
 ## 读数
 
-| round | window | proposal | attempt | T_1 | T_2 | T_3 | T_4 | S_consist | S_holdout | S_stable | W_evid | W_family | W_elem | C_tok | inner | outer | verdict | exec | notes |
-|-------|--------|----------|---------|-----|-----|-----|-----|-----------|-----------|----------|--------|----------|--------|-------|-------|-------|---------|------|-------|
-| 0 | — | baseline | — | | | | | | — | | | | | | — | — | — | | 冷启动基线（v0 编译后、未进化） |
+| round | window | proposal | attempt | T_1 | T_2 | T_3 | T_4 | S_consist | S_holdout | S_stable | W_evid | W_family | W_elem | C_tok | inner | outer | verdict | exec | gate_mode | script_hash | notes |
+|-------|--------|----------|---------|-----|-----|-----|-----|-----------|-----------|----------|--------|----------|--------|-------|-------|-------|---------|------|-----------|-------------|-------|
+| 0 | — | baseline | — | | | | | | — | | | | | | — | — | — | | — | | 冷启动基线（v0 编译后、未进化） |
 
 ## 拒绝签名表（归因前必查；命中者不得重复提议）
 

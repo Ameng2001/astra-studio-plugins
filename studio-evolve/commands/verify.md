@@ -10,4 +10,4 @@ description: Adjudicate one proposal in a sandbox under the dual gate (inner: st
 - 外关卡：每轮重抽的、只含真实案例的留出集上三维不回退；多骨干时每个骨干都要过。
 - 裁决 `ACCEPT / REVISE / REJECT`，读数追加到 `growth-ledger.md`；`ACCEPT` 也不合入，合入在 `/studio-evolve:cycle` 里人确认后进行。
 
-前置：clife-onto-engine 可用，且 YAML 案例能被引擎批量执行（缺则报 `CQ_RUNNER_MISSING`，先补这块）。本版无脚本，读数按规范手算，标 `MANUAL`。
+前置：clife-onto-engine 可用，且 YAML 案例能被引擎批量执行成 `results.jsonl`（缺则报 `CQ_RUNNER_MISSING`，先补这块）。读数与裁决由 `scripts/{holdout_sample,growth_metrics,gate_decide}.py` 计算，标 `AUTO`；`gate_decide.py --gate-mode` 另有 7 种对照模式供论文实验，生产只用 `3d`。

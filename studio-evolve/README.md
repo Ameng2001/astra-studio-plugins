@@ -26,7 +26,22 @@ studio-planner ──▶ studio-ontology ──▶ clife-onto-engine ──▶ �
 | `evolve-ground` | 动态本体构建 | `ontology-map.md` + 数据源 | IR 新增 §8 证据段：每条对象 / 映射 / 规则挂探测查询与采样结果 |
 | `evolve-simulate` | 仿真加强 | 本体 + 证据 | `.studio-evolve/{id}/cases/sim/*.yaml`：从规则 / 动作 / 关系派生、带标签与难度层级的 CQ 案例 |
 | `evolve-attribute` | 自生长迭代 · 归因 | 运行轨迹 + 反馈标签 | `studio/changes/{id}/proposals/{n}.md`：分歧点 → 五要素缺陷类型 → 原子 IR 编辑提案 |
-| `evolve-verify` | 三维双重闸门 | 一份提案 | 沙箱裁决：内关卡（来源案例严格更优）∧ 外关卡（重抽留出集不回退），三维增量写入 growth-ledger |
+| `evolve-verify` | 三维双重闸门 | 一份提案 | 沙箱裁决：内关卡（来源案例严格更优）∧ 外关卡（重抽留出集不回退），三维增量写入 growth-ledger；读数与判定由 `scripts/` 三个脚本算（AUTO） |
+
+## 脚本（`scripts/`）
+
+| 脚本 | 用途 |
+|---|---|
+| `holdout_sample.py` | 每轮重抽 real-only 分层留出集（`--holdout-size` 与 window_size 解耦；池薄报 `HOLDOUT_THIN`；同轮拒绝重抽） |
+| `growth_metrics.py` | 从案例执行结果 `results.jsonl` 算三维读数 T / S / W 与成本 C；`runner-spec` 打印结果行字段约定；`--ir` 算 W_evid |
+| `gate_decide.py` | 双重闸门裁决 + §5 报告 + `verdict.json` + 台账行；`--gate-mode` 八种：`3d`（生产）、`3d-noT/noS/noW`、`1d`、`1d-strict`、`none`、`random`（后七种只给论文对照实验） |
+| `smoke_gate_modes.py` | 合成案例集上的端到端冒烟（80 条案例 × 2 变体 × 3 run，两份提案 × 7 种判定模式 + random 接受率校验） |
+
+```bash
+python3 studio-evolve/scripts/smoke_gate_modes.py        # 全绿即脚本链可用
+```
+
+引擎侧还缺一块：把 clife-onto-engine 的批量执行结果转成 `results.jsonl`（字段见 `growth_metrics.py runner-spec`），在 `RESULTS_RUNNERS` 注册即可。
 
 两份规范是脊梁：
 
@@ -72,7 +87,7 @@ studio-planner ──▶ studio-ontology ──▶ clife-onto-engine ──▶ �
 
 - 闸门要在沙箱里跑 CQ，前提是 clife-onto-engine 可用，且 `cq/golden.yaml` 能被引擎批量执行。当前 compile-rules 写明 YAML 需人转写成 `cq.py`，这是本插件第一块要补的砖（见 `evolve-verify` 的 Pre-check）。
 - 归因依赖引擎审计日志记录每一步动作、规则触发与回滚。若只记最终结果，`evolve-attribute` 退化为从会话轨迹提签名，精度下降，报告会明示。
-- 本版只有规范与 skill 草稿，没有 Python 脚本。闸门的数值计算、留出集重抽、沙箱复制暂由 skill 按规范手工执行，并在报告里标 `MANUAL`。
+- 闸门的数值计算、留出集重抽、裁决与记账已脚本化（`scripts/`，标 `AUTO`）。仍缺两块：引擎侧把批量执行结果转成 `results.jsonl` 的 runner，以及沙箱复制 / 重编译的脚本化（目前仍由 skill 按 §0 手工执行）。
 
 ## 依赖
 

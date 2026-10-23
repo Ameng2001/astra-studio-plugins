@@ -14,7 +14,7 @@ Toolchain plugins (`studio-*`) — the studio itself:
 ├── studio-platform/     # Platform documentation generator (brainmap, agent mapping, tech designs, visualization) — 6 skills
 ├── studio-design/       # Design-to-code (screenshot → Pencil → OpenSpec → code) — 4 skills
 ├── studio-ontology/     # FDE pipeline — compile business analysis into a clife-onto-engine ontology — 3 skills
-├── studio-evolve/       # Self-evolving ontology — ground / simulate / attribute / verify (dual gate, 3 growth axes) — 4 skills
+├── studio-evolve/       # Self-evolving ontology — ground / simulate / attribute / verify (dual gate, 3 growth axes) — 4 skills, 4 scripts
 ```
 
 Vertical plugins — built *with* the toolchain, shipped from the same marketplace:
