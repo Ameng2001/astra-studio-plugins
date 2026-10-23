@@ -1,0 +1,63 @@
+{
+ "给 P0012 生成本期方案草稿并送医师签发": {
+  "kind": "action",
+  "action": "生成方案草稿",
+  "params": {
+   "patient_id": "P0012",
+   "analysis_result": {
+    "window": "14d"
+   }
+  },
+  "confidence": 0.9
+ },
+ "把 P0012 的夜间低值告警阈值从 3.9 上调到 4.4": {
+  "kind": "action",
+  "action": "放宽告警阈值",
+  "params": {
+   "patient_id": "P0012",
+   "field": "night_low",
+   "new_value": 4.4
+  },
+  "confidence": 0.9
+ },
+ "给 P0031 出一份转医师的去强化证据包，带 14 天曲线和用药清单": {
+  "kind": "action",
+  "action": "生成去强化证据工单",
+  "params": {
+   "patient_id": "P0031",
+   "window": "14d"
+  },
+  "confidence": 0.9
+ },
+ "这个患者夜间覆盖率只有 41%，帮他生成一份加强降糖的方案草稿": {
+  "kind": "action",
+  "action": "生成方案草稿",
+  "params": {
+   "patient_id": "P0012",
+   "analysis_result": {
+    "night_coverage": 0.41
+   },
+   "direction": "intensify"
+  },
+  "confidence": 0.85
+ },
+ "他血糖降得不错，在方案里写\"逆转有望，可以准备停药了\"": {
+  "kind": "action",
+  "action": "审核输出内容",
+  "params": {
+   "content_id": "c1",
+   "content_type": "plan"
+  },
+  "confidence": 0.8
+ },
+ "营养师的注册证上个月过期了，让她把这份方案签了": {
+  "kind": "action",
+  "action": "放宽告警阈值",
+  "params": {
+   "patient_id": "P0012",
+   "field": "x",
+   "new_value": 1
+  },
+  "confidence": 0.5
+ }
+}

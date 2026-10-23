@@ -1,0 +1,12 @@
+id: grass-07
+q: "parcel_001 能用哪些修复方法？"
+expect: query
+tier: 2
+family: restore
+origin: real
+observed_at: 2026-09-15
+elements: []
+label:
+  answer: "query"
+  source: feedback
+variants: []

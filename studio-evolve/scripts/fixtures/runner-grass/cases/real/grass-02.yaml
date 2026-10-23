@@ -1,0 +1,12 @@
+id: grass-02
+q: "给 parcel_001 出方案，用紫花苜蓿，预算300"
+expect: rejected(乡土合规)
+tier: 3
+family: restore
+origin: real
+observed_at: 2026-09-15
+elements: []
+label:
+  answer: "rejected(乡土合规)"
+  source: feedback
+variants: []

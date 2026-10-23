@@ -32,16 +32,19 @@ studio-planner ──▶ studio-ontology ──▶ clife-onto-engine ──▶ �
 
 | 脚本 | 用途 |
 |---|---|
+| `runner_onto_engine.py` | 案例 → clife-onto-engine（IntentCompiler 路由 + validate / OQL 预演执行）→ `results.jsonl`；`--router manual|live`；`golden-to-cases` 转黄金集。跑不起来的案例记 `pass=null` + 原因 flag，不进通过率 |
 | `holdout_sample.py` | 每轮重抽 real-only 分层留出集（`--holdout-size` 与 window_size 解耦；池薄报 `HOLDOUT_THIN`；同轮拒绝重抽） |
 | `growth_metrics.py` | 从案例执行结果 `results.jsonl` 算三维读数 T / S / W 与成本 C；`runner-spec` 打印结果行字段约定；`--ir` 算 W_evid |
 | `gate_decide.py` | 双重闸门裁决 + §5 报告 + `verdict.json` + 台账行；`--gate-mode` 八种：`3d`（生产）、`3d-noT/noS/noW`、`1d`、`1d-strict`、`none`、`random`（后七种只给论文对照实验） |
+| `smoke_runner.py` | runner 冒烟：引擎自带 grass 插件 + 引擎录制的真 Qwen 路由，9 条案例 6 通过 3 真阴性（没有引擎时 SKIP） |
 | `smoke_gate_modes.py` | 合成案例集上的端到端冒烟（80 条案例 × 2 变体 × 3 run，两份提案 × 7 种判定模式 + random 接受率校验） |
 
 ```bash
-python3 studio-evolve/scripts/smoke_gate_modes.py        # 全绿即脚本链可用
+python3 studio-evolve/scripts/smoke_gate_modes.py        # 闸门链全绿
+python3 studio-evolve/scripts/smoke_runner.py            # 引擎链全绿（需 ../onto-fundary-plugins）
 ```
 
-引擎侧还缺一块：把 clife-onto-engine 的批量执行结果转成 `results.jsonl`（字段见 `growth_metrics.py runner-spec`），在 `RESULTS_RUNNERS` 注册即可。
+引擎侧现状（2026-10-23）：路由与执行都接通了；真正的缺口在**插件实现**——glycowise 编译产物的 handler 与 function-backed 规则多为 TODO(FDE)（28 条黄金问题里 27 条不可判），以及每个案例的路由录制（`--router live` 可现录，需 LLM 端点）。
 
 两份规范是脊梁：
 
@@ -87,7 +90,7 @@ python3 studio-evolve/scripts/smoke_gate_modes.py        # 全绿即脚本链可
 
 - 闸门要在沙箱里跑 CQ，前提是 clife-onto-engine 可用，且 `cq/golden.yaml` 能被引擎批量执行。当前 compile-rules 写明 YAML 需人转写成 `cq.py`，这是本插件第一块要补的砖（见 `evolve-verify` 的 Pre-check）。
 - 归因依赖引擎审计日志记录每一步动作、规则触发与回滚。若只记最终结果，`evolve-attribute` 退化为从会话轨迹提签名，精度下降，报告会明示。
-- 闸门的数值计算、留出集重抽、裁决与记账已脚本化（`scripts/`，标 `AUTO`）。仍缺两块：引擎侧把批量执行结果转成 `results.jsonl` 的 runner，以及沙箱复制 / 重编译的脚本化（目前仍由 skill 按 §0 手工执行）。
+- 闸门的数值计算、留出集重抽、裁决、记账与案例执行（runner）已脚本化（`scripts/`，标 `AUTO`）。仍缺：沙箱复制 / 重编译的脚本化（目前仍由 skill 按 §0 手工执行）；以及目标插件自身的实现完整度（handler 为 TODO 的本体跑不出可判读数）。
 
 ## 依赖
 

@@ -1,0 +1,12 @@
+id: grass-05
+q: "巴彦淖尔有哪些地块？"
+expect: query
+tier: 1
+family: restore
+origin: real
+observed_at: 2026-09-15
+elements: []
+label:
+  answer: "query"
+  source: feedback
+variants: []

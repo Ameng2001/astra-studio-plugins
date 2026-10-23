@@ -1,0 +1,12 @@
+id: grass-01
+q: "给 parcel_001 出一地一方，用碱茅，预算300"
+expect: action(出一地一方)
+tier: 3
+family: restore
+origin: real
+observed_at: 2026-09-15
+elements: []
+label:
+  answer: "action(出一地一方)"
+  source: feedback
+variants: []

@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-SCRIPTS = ["growth_metrics.py", "gate_decide.py", "holdout_sample.py", "_common.py"]
+SCRIPTS = ["growth_metrics.py", "gate_decide.py", "holdout_sample.py", "runner_onto_engine.py", "_common.py"]
 
 
 def scripts_hash() -> str:

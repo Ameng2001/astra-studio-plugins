@@ -1,0 +1,12 @@
+id: grass-03
+q: "给草样 batch_A 快检评级，CP18 NDF40 ADF30 RFV150 霉菌毒素0.01"
+expect: action(快检评级)
+tier: 3
+family: forage
+origin: real
+observed_at: 2026-09-15
+elements: []
+label:
+  answer: "action(快检评级)"
+  source: feedback
+variants: []

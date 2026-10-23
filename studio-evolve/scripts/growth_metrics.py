@@ -14,8 +14,8 @@
    "tier": 1-4, "family": "<场景类别>", "origin": "real"|"sim", "observed_at": "YYYY-MM-DD"}
   pass 的判定由引擎对照 case.expect 得出（growth-metrics.md 开头的 pass(h, d)），脚本不复判。
 
-运行器接口：RESULTS_RUNNERS 里注册 name -> callable(path) -> rows。本版只有 jsonl（读预先录好的结果）。
-真实引擎接入时再加一个 runner，把 clife-onto-engine 的批量执行结果转成同样的行。
+运行器接口：RESULTS_RUNNERS 里注册 name -> callable(path) -> rows。jsonl = 读预先录好的结果；
+onto-engine = 读 runner_onto_engine.py 产出的文件（案例 → clife-onto-engine 路由 + 预演执行）。pass=null 的行（路由不可用 / 引擎报错）不进通过率，计入 n_unscored 与 flags。
 
 读数定义（对应 growth-metrics.md 的节）
   T_k      = Σ pass / 条数，按 tier 分层，只算原题（variant 为空）                          「长高」
@@ -46,7 +46,12 @@ def runner_jsonl(path: Path) -> list[dict]:
     return read_jsonl(path)
 
 
-RESULTS_RUNNERS = {"jsonl": runner_jsonl}
+def runner_onto_engine(path: Path) -> list[dict]:
+    """results.jsonl 由 runner_onto_engine.py run 产出（同一行格式，多了 q / expect / actual / kind / flags）。"""
+    return read_jsonl(path)
+
+
+RESULTS_RUNNERS = {"jsonl": runner_jsonl, "onto-engine": runner_onto_engine}
 
 
 # ---------------------------------------------------------------- metrics
@@ -83,8 +88,13 @@ def evidence_rate(ir_path: Path) -> tuple[float | None, int, int]:
 
 
 def compute(rows: list[dict], theta_tier: float = 0.8) -> dict:
-    orig = [r for r in rows if not r.get("variant")]
     flags = []
+    unscored = [r for r in rows if r.get("pass") is None]
+    if unscored:
+        kinds = sorted({f.split(":")[0] for r in unscored for f in (r.get("flags") or ["UNSCORED"])})
+        flags.append(f"UNSCORED:{len(unscored)}:{'/'.join(kinds)}")
+        rows = [r for r in rows if r.get("pass") is not None]   # 跑不起来的行不进任何通过率
+    orig = [r for r in rows if not r.get("variant")]
     # 长高 T_k
     by_tier: dict[int, list[int]] = defaultdict(list)
     for r in orig:
@@ -140,7 +150,7 @@ def compute(rows: list[dict], theta_tier: float = 0.8) -> dict:
         "n_cases": len({r.get("case") for r in orig}), "n_rows": len(rows), "n_tier": n_tier, "origins": dict(origins),
         "T": {f"T_{k}": T[k] for k in (1, 2, 3, 4)}, "T_max": T_max, "A": A,
         "S_consist": S_consist, "S_stable": S_stable, "W_family": W_family, "C": C, "C_gate": C_gate,
-        "runs": len(by_run), "flags": flags,
+        "runs": len(by_run), "n_unscored": len(unscored), "flags": flags,
     }
 
 
