@@ -73,8 +73,13 @@ def void_run(ws: Path, run_id: str, reason: str) -> dict:
     return append_run(ws, tomb)
 
 
-def formal_blockers(run: dict, cfg: dict, lock_ok: bool) -> list[str]:
-    """Why a run cannot be formal. Empty list == formal."""
+def formal_blockers(run: dict, cfg: dict, lock_ok: bool, criteria: dict | None = None) -> list[str]:
+    """Why a run cannot be formal. Empty list == formal.
+
+    n_min 取 config.thresholds.n_min 与该 run 所属各 RQ 在 criteria.yaml 里的 n_min 的最大者（RQ 级判据更严时以 RQ 为准）。
+    config.thresholds.formal_preconditions（列表，每项 {id, text, met}）里任一 met 不为 true 的前置条件也阻塞——
+    这是协议级的「正式 run 前置」（如 real 池规模、读数由脚本计算），样本量再大也不能绕过；满足后把 met 改成 true。
+    """
     b = []
     if not lock_ok:
         b.append("criteria.lock 缺失或与 criteria.yaml 哈希不一致")
@@ -82,12 +87,26 @@ def formal_blockers(run: dict, cfg: dict, lock_ok: bool) -> list[str]:
         v = run.get(k)
         if v in (None, "", [], {}):
             b.append(f"缺学生字段 {k}")
-    n_min = int((cfg.get("thresholds") or {}).get("n_min", 30))
+    th = cfg.get("thresholds") or {}
+    n_min = int(th.get("n_min", 30))
+    crit = (criteria or {}).get("criteria") or criteria or {}
+    for rq in run.get("rq") or []:
+        try:
+            rq_min = int((crit.get(rq) or {}).get("n_min") or 0)
+        except (TypeError, ValueError):
+            rq_min = 0
+        if rq_min > n_min:
+            n_min = rq_min
     try:
         if int(run.get("n") or 0) < n_min:
             b.append(f"n={run.get('n')} < n_min={n_min}")
     except (TypeError, ValueError):
         b.append("n 不是整数")
+    for pre in th.get("formal_preconditions") or []:
+        if not isinstance(pre, dict):
+            continue
+        if pre.get("met") is not True:
+            b.append(f"正式 run 前置未满足：{pre.get('id') or '?'}（{pre.get('text') or ''}）")
     if run.get("contamination") not in CONTAMINATION:
         b.append(f"contamination 须为 {sorted(CONTAMINATION)}")
     if run.get("confounded"):

@@ -10,6 +10,7 @@
   record_run.py <paper-id> --void <run_id> --reason "..."      # 追加作废行并重算
 
 自动采集：run_id ts git owner config_hash seed duration_s source。学生五项缺了照样入账，判 exploratory。
+formal 还要：n ≥ max(config n_min, 该 RQ 在 criteria.yaml 的 n_min)，且 config.thresholds.formal_preconditions 全部 met（协议级前置，样本量不能绕过）。
 
 metrics.json（或 run-dir/metrics.json）可选字段：
   {"metric": {"name": "T_tier3", "value": 0.71, "ci": [0.64, 0.78]},  # 或 "metrics": {"T_tier3": 0.71, ...}
@@ -30,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from paper_ws import workspace, load_config, git_info, sha256_file, now_iso  # noqa: E402
+from paper_ws import workspace, load_config, read_yaml_lite, git_info, sha256_file, now_iso  # noqa: E402
 from ledger_io import append_run, next_run_id, formal_blockers, void_run, KINDS, CONTAMINATION  # noqa: E402
 from record_common import lock_status, rel  # noqa: E402
 from rollup_hypotheses import rollup  # noqa: E402
@@ -214,7 +215,9 @@ def main() -> None:
     if m and m.get("value") is None and run["status"] != "failed":
         print(f"⚠️  metric {m.get('name')} 没有数值（--metric name=value 或 metrics.json 提供）")
     lock_ok, lock_msg = lock_status(ws)
-    blockers = formal_blockers(run, cfg, lock_ok)
+    crit_path = ws / "proposal" / "criteria.yaml"
+    criteria = read_yaml_lite(crit_path) if crit_path.exists() else {}
+    blockers = formal_blockers(run, cfg, lock_ok, criteria)
     if not lock_ok:
         blockers[0] = f"判据未冻结：{lock_msg}"
     if run["status"] != "failed":
