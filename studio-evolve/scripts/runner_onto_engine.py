@@ -32,7 +32,8 @@ pass 判定（对照 case.expect）
   真实窗口里的裁决常依赖同窗口前序动作写下的状态（前序 commit 的对象、告警、证据包……）。案例可带
     setup: [{action, params, actor_role?, actor_id?, trace_id?}, …]
   runner 对这类案例单独起一份新鲜 seed 的 store，按序真 execute 这些步骤（落库），再对口语做 validate / OQL。
-  setup 里任一步被拒或抛错 → 该案例 pass=null, flags=[SETUP_FAILED:<步>]（状态没搭起来就不评判）。没有 setup 的案例仍共用一份只读 seed。
+  setup 里某一步被**本状态**拒绝 → 跳过该步继续搭（候选本体把这步历史改写成拒绝，是它的反事实，照常评判），flags=[SETUP_DIVERGED:<步>:<动作>]；
+  抛错 → pass=null, flags=[SETUP_FAILED:<步>]（状态没搭起来不评判）。没有 setup 的案例仍共用一份只读 seed。
   make_real_cases.py 把同窗口里该轨迹之前所有非 rejected 的 execute 落成 setup，于是逐案例验证能复现窗口当时的状态。
 
 案例自带路由与禁触规则（case.route / case.expect_not，2026-10-23 加）
@@ -176,18 +177,20 @@ def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, regi
             "wall_s": round(time.perf_counter() - t0, 4), "flags": flags}
 
 
-def apply_setup(engine, ontology: str, steps, Actor, default_role: str) -> list[str]:
-    """按序真 execute 案例的 setup 步骤；返回 flags（空 = 全部落库成功）。"""
+def apply_setup(engine, ontology: str, steps, Actor, default_role: str) -> tuple[bool, list[str]]:
+    """按序真 execute 案例的 setup 步骤。返回 (可评判, flags)：
+    被拒的步跳过并记 SETUP_DIVERGED（本状态改写了窗口历史，是它的反事实）；抛错记 SETUP_FAILED 且不可评判。"""
+    flags: list[str] = []
     for i, st in enumerate(steps or []):
         actor = Actor(str(st.get("actor_id") or "evolve-setup"), str(st.get("actor_role") or default_role))
         try:
             res = engine.execute(ontology, st["action"], dict(st.get("params") or {}), actor)
         except Exception as e:  # noqa: BLE001
-            return [f"SETUP_FAILED:{i}:{st.get('action')}:{type(e).__name__}"]
+            return False, flags + [f"SETUP_FAILED:{i}:{st.get('action')}:{type(e).__name__}"]
         decision = getattr(res, "decision", None)
         if decision not in ("committed", "pending_hil"):
-            return [f"SETUP_FAILED:{i}:{st.get('action')}:{decision or 'rejected'}"]
-    return []
+            flags.append(f"SETUP_DIVERGED:{i}:{st.get('action')}")
+    return True, flags
 
 
 def cmd_run(a) -> None:
@@ -235,20 +238,21 @@ def cmd_run(a) -> None:
             if c.get("route"):  # 案例自带真实轨迹的意图：q 与全部 variants 都按它走，不查共享录制
                 from clife_onto_engine.intent.llm import ReplayLLMClient
                 c_compiler = IntentCompiler(ReplayLLMClient({q: c["route"] for _, q in utterances}), registry)
-            c_store, c_engine, setup_flags = store, engine, []
+            c_store, c_engine, setup_ok, setup_flags = store, engine, True, []
             if setup:  # 状态前置：这条案例独占一份新鲜 seed，按序真 execute 前序动作后再评判
                 c_store = InMemoryStore()
                 if seeded:
                     plugin.seed_reference_data(c_store)
                 c_engine = ActionEngine(registry, store=c_store)
-                setup_flags = apply_setup(c_engine, a.ontology, setup, Actor, a.actor_role)
+                setup_ok, setup_flags = apply_setup(c_engine, a.ontology, setup, Actor, a.actor_role)
             for run in range(a.repeat):
                 for variant, q in utterances:
-                    if setup_flags:
+                    if not setup_ok:
                         r = {"pass": None, "kind": None, "actual": "setup-failed", "steps": 0, "tokens": None, "wall_s": 0.0, "flags": list(setup_flags)}
                     else:
                         r = run_one(q, c["expect"], ontology=a.ontology, compiler=c_compiler, engine=c_engine, store=c_store,
                                     registry=registry, actor=actor, client=client, expect_not=expect_not)
+                        r["flags"] = list(setup_flags) + list(r.get("flags") or [])
                     row = {**base, "variant": variant, "run": run, **r, "q": q, "expect": str(c["expect"])}
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                     rows.append(row)
