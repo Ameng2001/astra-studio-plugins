@@ -42,6 +42,14 @@ pass 判定（对照 case.expect）
          其 q 与全部 variants 都按这份意图经同一个 IntentCompiler 校验（同一句口语在 golden 与真实窗口里路由不同时，真实案例以窗口为准）。
   expect_not: [规则名…]  —— 反馈判定「不该响」的规则（真实轨迹里引擎命中了、业务侧裁定为假阳性）。命中任一条（精确或前缀）即 fail，
          哪怕 expect 的规则也命中了：rejected(D10) 之外还响了 R51 就是没通过。
+
+落库状态断言（case.expect_state，2026-10-23 加，round 5 P9 暴露：根因修法与朴素修法在 commit / 规则名上逐行相同，差别只在写了什么）
+  expect_state: [{type: GlucoseReading, key: r-P0045-dup1, fields: {quality_flag: superseded, superseded_by: r-P0045-01343}}, …]
+  对 validate 预演里 handler 暂存（stage_write）的对象断言：同 (type, key) 以最后一次写入为准；fields 里每个字段都要相等（值为 null 表示该字段
+  必须缺失或为 None）。对象没暂存 → fail，flags=[STATE_MISSING:<type>/<key>]；字段不符 → fail，flags=[STATE_MISMATCH:<type>/<key>.<field>=<实际>]。
+  只在 expect 为 action(X) 且预演 would_commit 时评估（拒绝的动作本来就不写）。引擎的 ActionPreview.staged 只给 (type, key)，预演结束 overlay.clear()
+  会把暂存数据清掉，所以 runner 在 engine._new_ctx 外包一层，用会先快照再清空的 overlay 列表拿到数据（依赖引擎私有接口 _new_ctx / ActionContext.overlay；
+  接口不在时 expect_state 行 pass=null，flags=[STATE_UNSUPPORTED]）。
 """
 from __future__ import annotations
 
@@ -128,7 +136,76 @@ def rule_hit(target: str, rules: list[str]) -> bool:
     return any(r == target or r.startswith(target + "_") or r.startswith(target) and target[-1:].isdigit() for r in rules)
 
 
-def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, registry, actor, client, expect_not=()) -> dict:
+class _SnapList(list):
+    """预演结束时引擎 overlay.clear()；这里先把暂存快照留下再清。"""
+    snapshot: list = []
+
+    def clear(self):
+        self.snapshot = list(self)
+        super().clear()
+
+
+def install_state_capture(engine) -> dict:
+    """给 ActionEngine 包一层：_new_ctx 用 _SnapList 当 overlay，并把最近一次 ctx 的 overlay 记到 holder['last']。"""
+    holder: dict = {"last": None, "ok": False}
+    try:
+        from clife_onto_engine.query import QueryView
+        from clife_onto_engine.sdk.context import ActionContext
+        from clife_onto_engine.sdk.capability import Capability
+    except Exception:
+        return holder
+    import types
+
+    def _new_ctx(self, spec, params, actor):
+        overlay = _SnapList()
+        view = QueryView(self.store, overlay)
+        ctx = ActionContext(ontology_id=spec.namespace, params=params, actor=actor, view=view, overlay=overlay)
+        cap = Capability(ctx, self.registry, action_def=spec)
+        holder["last"] = overlay
+        return ctx, cap, overlay
+    try:
+        engine._new_ctx = types.MethodType(_new_ctx, engine)
+        holder["ok"] = True
+    except Exception:
+        pass
+    return holder
+
+
+def staged_objects(holder) -> dict:
+    """最近一次预演暂存的对象 {(type, key): data}，同键以最后一次写入为准。"""
+    from clife_onto_engine.query import StagedWrite
+    ov = holder.get("last")
+    rows = list(getattr(ov, "snapshot", None) or []) or list(ov or [])
+    out: dict = {}
+    for w in rows:
+        if isinstance(w, StagedWrite):
+            out[(w.object_type, w.key)] = dict(w.data or {})
+    return out
+
+
+def check_state(expect_state, holder) -> list[str]:
+    """返回不满足的断言标记；空列表即全部满足。"""
+    bad: list[str] = []
+    if not holder.get("ok"):
+        return ["STATE_UNSUPPORTED"]
+    objs = staged_objects(holder)
+    for es in expect_state or []:
+        t, k = str(es.get("type")), str(es.get("key"))
+        d = objs.get((t, k))
+        if d is None:
+            bad.append(f"STATE_MISSING:{t}/{k}")
+            continue
+        for f, want in (es.get("fields") or {}).items():
+            got = d.get(f)
+            if want is None:
+                if got is not None:
+                    bad.append(f"STATE_MISMATCH:{t}/{k}.{f}={got!s}")
+            elif str(got) != str(want):
+                bad.append(f"STATE_MISMATCH:{t}/{k}.{f}={got!s}")
+    return bad
+
+
+def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, registry, actor, client, expect_not=(), expect_state=(), state_holder=None) -> dict:
     """路由 + 执行一条话。返回 {pass, kind, actual, steps, tokens, wall_s, flags}。"""
     from clife_onto_engine.query import QueryView
     from clife_onto_engine.query.oql import execute as oql_execute
@@ -162,6 +239,15 @@ def run_one(q: str, expect: str, *, ontology: str, compiler, engine, store, regi
             if forbidden:
                 passed = 0
                 flags.append("FORBIDDEN_RULE_HIT:" + ",".join(forbidden))
+            if expect_state and kind_exp == "action" and prev.would_commit and passed:
+                bad = check_state(expect_state, state_holder or {})
+                if bad == ["STATE_UNSUPPORTED"]:
+                    passed = None
+                    flags.append("STATE_UNSUPPORTED")
+                elif bad:
+                    passed = 0
+                    flags.extend(bad)
+                    actual += "·state✗"
         elif intent.kind == "query":
             steps += 1
             res = oql_execute(intent.oql, QueryView(store, []), registry)
@@ -239,6 +325,7 @@ def cmd_run(a) -> None:
             setup = c.get("setup") or []
             base["setup_steps"] = len(setup)
             expect_not = tuple(str(x) for x in (c.get("expect_not") or []))
+            expect_state = tuple(x for x in (c.get("expect_state") or []) if isinstance(x, dict))
             c_compiler = compiler
             if c.get("route"):  # 案例自带真实轨迹的意图：q 与全部 variants 都按它走，不查共享录制
                 from clife_onto_engine.intent.llm import ReplayLLMClient
@@ -250,13 +337,15 @@ def cmd_run(a) -> None:
                     plugin.seed_reference_data(c_store)
                 c_engine = ActionEngine(registry, store=c_store)
                 setup_ok, setup_flags = apply_setup(c_engine, a.ontology, setup, Actor, a.actor_role)
+            c_holder = install_state_capture(c_engine) if expect_state else None
             for run in range(a.repeat):
                 for variant, q in utterances:
                     if not setup_ok:
                         r = {"pass": None, "kind": None, "actual": "setup-failed", "steps": 0, "tokens": None, "wall_s": 0.0, "flags": list(setup_flags)}
                     else:
                         r = run_one(q, c["expect"], ontology=a.ontology, compiler=c_compiler, engine=c_engine, store=c_store,
-                                    registry=registry, actor=actor, client=client, expect_not=expect_not)
+                                    registry=registry, actor=actor, client=client, expect_not=expect_not,
+                                    expect_state=expect_state, state_holder=c_holder)
                         r["flags"] = list(setup_flags) + list(r.get("flags") or [])
                     row = {**base, "variant": variant, "run": run, **r, "q": q, "expect": str(c["expect"])}
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
