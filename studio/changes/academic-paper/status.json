@@ -1,0 +1,9 @@
+{
+  "type": "domain",
+  "domain": "academic-paper",
+  "iteration": 1,
+  "phase": "planning",
+  "created_at": "2026-10-23T12:30:00+08:00",
+  "updated_at": "2026-10-23T13:00:00+08:00",
+  "plugins": ["studio-paper"]
+}

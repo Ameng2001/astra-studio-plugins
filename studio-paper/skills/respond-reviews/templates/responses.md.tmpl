@@ -1,0 +1,15 @@
+# 逐条回应表 —— {{paper_id}} · {{venue_name}} {{venue_year}} rebuttal 第 {{round}} 轮
+
+> 写入 `.studio-paper/{{paper_id}}/rebuttal/responses.md`。一行 = `rebuttal/reviews.md` 里的一条要点（不合并、不遗漏）。
+> - 分类：fatal / fixable / 误解 / 澄清
+> - 回应：中性，一到三句；不写「我们认为」去回应需要数据的质疑
+> - 证据指针：稿中 § / 表号，或新表 `T-R<n>`（文件放 `rebuttal/tables/T-R<n>.md`）
+> - run_id：补实验必须先经 record-run 入账；`check_refs.py` 会核对
+> - 是否新 claim：是 → 必须有 run_id；新数据削弱原 claim → 走收窄分支（闸门 D11）
+> - priority：1 = 最该保留；`budget_check.py` 超限时从数字最大的开始裁
+
+| ID | 原话 | 分类 | 回应 | 证据指针 | run_id | 修改承诺 | 是否新 claim | priority |
+|---|---|---|---|---|---|---|---|---|
+| R1-W1 |  |  |  |  |  |  | 否 | 1 |
+| R1-Q1 |  |  |  |  |  |  | 否 | 2 |
+| R2-W1 |  |  |  |  |  |  | 否 | 1 |

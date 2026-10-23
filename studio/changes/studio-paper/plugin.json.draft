@@ -1,0 +1,26 @@
+{
+  "name": "studio-paper",
+  "version": "0.1.0",
+  "description": "Research-paper production pipeline for CS groups — positioning (versioned literature matrix, nearest-work diff, thesis sentence), proposal (numbered RQs, frozen pass/fail criteria, figure plan), experiment ledger (every run incl. negative results, formal/exploratory lock, hypothesis rollup, thesis-drift flags), frozen result tables and an evidence pack for studio-docs, internal review by three reviewer roles against the venue's review form, submission checks, and a response-to-reviewers table. Six advisor gates; the plugin pre-screens, a human signs. Literature search via bundled MCP servers (arxiv-mcp-server, paper-search-mcp; Sci-Hub hard-blocked by a PreToolUse hook); figures via SciencePlots.",
+  "author": {
+    "name": "VanLengs",
+    "url": "https://github.com/VanLengs"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "research-paper",
+    "experiment-ledger",
+    "pre-registration",
+    "peer-review",
+    "rebuttal",
+    "reproducibility"
+  ],
+  "dependencies": [
+    "studio-core"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "agents": "./agents/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

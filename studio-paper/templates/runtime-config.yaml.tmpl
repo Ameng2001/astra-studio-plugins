@@ -1,0 +1,45 @@
+# studio-paper 运行时配置 —— .studio-paper/{{paper_id}}/config.yaml
+# git 跟踪；阈值在一篇论文的一轮（iteration）内固定，改阈值等于开新一轮。
+
+schema: studio-paper
+paper_id: {{paper_id}}
+title: "{{title}}"
+
+venue:
+  family: {{venue_family}}        # se | ml
+  name: {{venue_name}}            # e.g. ICSE / FSE / ASE / NeurIPS / ICLR
+  year: {{venue_year}}
+  cfp_url: ""                     # 运行时读当年 CFP（评审表字段、匿名与 artifact 要求、rebuttal 规则）
+
+thresholds:
+  n_min: 30                       # 低于此样本量的结果只能入探索性 / 不能进主表
+  seeds_min: 3                    # 主结果表要求的最少随机种子数
+  baseline_budget_ratio_max: 2.0  # 本方法 / 基线 的调参预算比，超过即告警
+  baseline_deviation_tol: 0.05    # 基线复现相对偏差超过即标「需解释」
+
+gates:                            # 六处导师签字；插件只预审
+  thesis: {approver: ""}
+  criteria: {approver: ""}
+  results: {approver: ""}
+  review: {approver: ""}
+  submission: {approver: ""}
+  rebuttal: {approver: ""}
+
+ledger:
+  path: .studio-paper/{{paper_id}}/ledger/runs.jsonl
+  sources:                        # record-run --import 的来源
+    - kind: studio-evolve
+      path: .studio-evolve/{{ontology_id}}/ledger/growth-ledger.md
+  student_fields: [rq, metric, n, contamination, fairness]   # 学生补填上限五项；其余自动采集
+  # studio-evolve 导入映射（record-run --import 用）：三轴 + 成本 → RQ
+  evolve_map: {T: RQ-1, S: RQ-2, W: RQ-3, C: RQ-4}
+  evolve_contamination: excluded   # 留出集与仿真集分离 → excluded
+  evolve_fairness: {budget: "same harness", search_space: "evolve proposals (one per round)", seeds: 1, hardware: "same harness"}
+
+rebuttal:
+  limit: {{rebuttal_limit}}       # 字数或页数（按会议）
+  rounds: 1
+
+review:
+  roles: [reviewer-nearest-author, reviewer-methodology, reviewer-adjacent]
+  passes: 2                       # 写作未完时一次、投稿冻结前一次

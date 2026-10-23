@@ -1,0 +1,33 @@
+# proposal/criteria.yaml —— 预登记判据；导师签字后由 freeze_criteria.py 冻结为 criteria.lock
+# 形状约定：criteria.<RQ-n>.<字段>，每个 rq.yaml 里的 RQ 都必须有一节；可选按 H-id 加一节覆盖。
+# 必填（缺任何一项 freeze 拒绝，退出码 2）：
+#   failure         什么结果算失败——文字（写不出就不立项）
+#   pass            机器可判的通过条件 {metric, op, value}，op ∈ >= > <= < ==
+#   fail            机器可判的失败条件 {metric, op, value}；介于 pass 与 fail 之间 = 待定
+#   n_min 或 n      每次评测的样本量下限（低于 config.thresholds.n_min 会告警）
+#   seeds           随机种子数（低于 config.thresholds.seeds_min 会告警）
+#   contamination   excluded | known_overlap | unknown（数据与预训练语料关系）
+# 建议：success / metrics（该 RQ 允许入主表的全部指标名，freeze-results 据此判「挑指标」）/ agg（多条 formal run 的合并：mean|median|min|max|last，进化轮次用 last）
+#       / interval / protocol / baselines / figure / contamination_note
+# 值保持单行；列表用行内 [a, b]；map 用行内 {k: v}；值里不要出现「 #」。
+
+criteria:
+  RQ-1:
+    metrics: [T_tier1, T_tier2, T_tier3, T_tier4]
+    pass: {metric: T_tier3, op: ">=", value: 0.65}
+    fail: {metric: T_tier3, op: "<", value: 0.60}
+    agg: last
+    success: "H-1a 成立：末轮 T_tier3 − 第 0 轮 ≥ 0.10，bootstrap 95% CI 下界 > 0，且 T_tier1/T_tier2 下降 ≤ 0.02"
+    failure: "末轮 T_tier3 提升 < 0.05，或 CI 下界 ≤ 0，或任一低层 tier 下降 > 0.02（以增长换遗忘）"
+    n_min: 40
+    interval: "每轮留出集 bootstrap 95% CI（1000 次重采样）"
+    seeds: 3
+    protocol: "固定留出集（与仿真集分离）；每轮窗口 40 例；20 轮；seed ∈ [0, 1, 2]；轮次与窗口预先固定不挑"
+    contamination: excluded
+    contamination_note: "留出集由仿真器在冻结后新生成，未进入任何 LLM 预训练或本体生长过程"
+    baselines: [static-ontology, rule-only-growth]
+    figure: "F1 折线：x=轮次，y=各 tier 通过率，阴影为 CI；预期 tier-3 单调上升、tier-1/2 平"
+  H-1a:
+    pass: {metric: T_tier3, op: ">=", value: 0.65}
+    fail: {metric: T_tier3, op: "<", value: 0.60}
+    agg: last
