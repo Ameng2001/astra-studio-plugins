@@ -13,6 +13,9 @@
   4. 候选池不够每层 1 条、或总量不足 → 报 HOLDOUT_THIN，按实际可抽执行，不用 sim 补。
   5. --merge-min N（协议 v3，2026-10-23）：分层后样本 < N 的层并入同 family 的「其余 tier」层（tier 键记为 rest），
      --stratify 此时应为 family,tier；--check-pool 只做前置复核不抽样：打印并层后每层样本数，池 ≥ 2×holdout_size 且每层 ≥ N 才 ✓（exit 0），否则 exit 3。
+  6. --family-override FILE（2026-10-24）：yaml，顶层 `families: {case_id: family}`（或直接是映射）；分层前用它覆盖案例的 family，
+     cases/real 文件本身不改。用途：历史窗口按规则 / 动作推断的 family 与口语集 source 自带的 family 不一致时，按 source 键整体重归。
+     留出集文件记 `family_override: <path>` 与覆盖条数；--check-pool 的输出也按覆盖后的层算。
   每轮重抽（seed 建议 = round 或 config 指定），同一轮只抽一次：输出文件已存在则拒绝覆盖。
 """
 from __future__ import annotations
@@ -80,6 +83,7 @@ def main() -> None:
     ap.add_argument("--ledger", type=Path, help="growth-ledger.md：追加「留出集记录」一行")
     ap.add_argument("--force", action="store_true", help="允许覆盖已存在的留出集文件（违反「每轮只抽一次」，仅调试用）")
     ap.add_argument("--merge-min", type=int, default=0, help="协议 v3：样本 < N 的层并入同 family 的 rest 层；0 = 不并层")
+    ap.add_argument("--family-override", type=Path, help="yaml {case_id: family}：分层前覆盖 family（不改 cases/real）")
     ap.add_argument("--check-pool", action="store_true", help="只复核正式 run 前置（池 ≥ 2×holdout_size 且并层后每层 ≥ merge-min），不抽样、不写文件")
     a = ap.parse_args()
 
@@ -87,6 +91,15 @@ def main() -> None:
     if not real_dir.is_dir():
         sys.exit(f"没有 {real_dir}（留出集只能来自 real 案例）")
     cases = {k: v for k, v in load_cases(real_dir).items() if v.get("origin", "real") == "real"}
+    n_override = 0
+    if a.family_override:
+        ov = load_yaml(a.family_override)
+        ov = ov.get("families", ov) if isinstance(ov, dict) else {}
+        for cid, fam in (ov or {}).items():
+            if str(cid) in cases and fam:
+                if cases[str(cid)].get("family") != fam:
+                    n_override += 1
+                cases[str(cid)]["family"] = str(fam)
     excl: set[str] = set()
     if a.exclude_file:
         y = load_yaml(a.exclude_file)
@@ -114,7 +127,8 @@ def main() -> None:
             strata[k].sort()
     if a.check_pool:
         need_pool = 2 * a.holdout_size
-        print(f"real-pool 前置复核：池 {len(pool)}（排除 Dᵢ {len(excl)}），分层 {', '.join(dims)}，并层阈值 {a.merge_min}，层数 {len(strata)}")
+        print(f"real-pool 前置复核：池 {len(pool)}（排除 Dᵢ {len(excl)}），分层 {', '.join(dims)}，并层阈值 {a.merge_min}，层数 {len(strata)}"
+              + (f"，family 覆盖 {n_override} 条（{a.family_override}）" if a.family_override else ""))
         if merged_note:
             print("  并层：" + "；".join(merged_note))
         thin_layers = []
@@ -145,6 +159,7 @@ def main() -> None:
              f"target_size: {a.holdout_size}", f"strata: {len([k for k in quota if quota[k] > 0])}",
              f"stratify: [{', '.join(dims)}]", f"merge_min: {a.merge_min}", f"median_observed_at: {median or 'null'}",
              f"excluded: {len(excl)}", f"pool: {len(pool)}", f"thin: {'true' if thin else 'false'}",
+             f"family_override: {a.family_override or 'null'}", f"family_overridden: {n_override}",
              "ids:"] + [f"  - {cid}" for cid, _ in picked] + ["strata_of:"] + \
             [f"  {cid}: [{', '.join(k)}]" for cid, k in picked]
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
