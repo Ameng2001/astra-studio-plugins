@@ -24,7 +24,8 @@ onto-engine = 读 runner_onto_engine.py 产出的文件（案例 → clife-onto-
   S_stable = 1 − 跨 run 的总通过率标准差（run 数 ≥ 2 才算，否则 1.0 并标 SINGLE_RUN）        「长壮」分量 3
   S_holdout 需要上一状态在同一留出集上的 A，由 gate_decide.py 在拿到两份读数后算            「长壮」分量 2
   A        = 原题总通过率（S_holdout 与一维闸门用）
-  W_evid   = IR §8 Evidence 表里 status=verified 的行数 / 行数（--ir 给了才算）               「长胖」比率 1
+  W_evid   = IR §8 Evidence 里 verified 的条目 / 应有证据条目（§1 Object + §6 Mapping + §4 function-backed Rule）「长胖」比率 1
+             --ir 给了才算；无 §8 → None + NO_EVIDENCE_TABLE（分母仍报在 W_evid_n）；不给 --ir → W_EVID_NOT_COMPUTED
   W_family = 至少有一条 tier≥2 原题通过的 family 数 / 结果里出现的 family 数                「长胖」比率 2
   W_elem   = --elem-counts 给的分项计数（只报告不进闸门）
   C        = 平均每案例的 (steps, tokens, wall_s)；闸门用 tokens，没有 tokens 时用 steps
@@ -62,29 +63,98 @@ def select_rows(rows: list[dict], state: str, case_ids: set[str] | None) -> list
     return out
 
 
-def evidence_rate(ir_path: Path) -> tuple[float | None, int, int]:
-    """解析 ontology-map.md 的 §8 Evidence 表：verified / 总行数。找不到表 → (None, 0, 0)。"""
-    text = ir_path.read_text(encoding="utf-8")
-    m = re.search(r"^##\s*8\.?\s*Evidence.*?$", text, re.M)
-    if not m:
-        return None, 0, 0
-    seg = text[m.end():]
-    nxt = re.search(r"^##\s", seg, re.M)
-    if nxt:
-        seg = seg[: nxt.start()]
-    total = verified = 0
+def _md_tables(seg: str) -> list[tuple[list[str], list[list[str]]]]:
+    """段落里的全部 markdown 表：[(header_cells, [row_cells, …]), …]。"""
+    tables, header, rows = [], None, []
     for line in seg.splitlines():
         s = line.strip()
-        if not s.startswith("|") or set(s) <= set("|-: "):
+        if not s.startswith("|"):
+            if header is not None:
+                tables.append((header, rows)); header, rows = None, []
+            continue
+        if set(s) <= set("|-: "):
             continue
         cells = [c.strip() for c in s.strip("|").split("|")]
-        if cells and cells[0] in ("element", "{{element}}"):
+        if header is None:
+            header = [c.lower() for c in cells]
+        else:
+            rows.append(cells)
+    if header is not None:
+        tables.append((header, rows))
+    return tables
+
+
+def _ir_section(text: str, num: int, title_re: str = "") -> str | None:
+    m = re.search(rf"^##\s*{num}\.?\s*{title_re}.*?$", text, re.M)
+    if not m:
+        return None
+    seg = text[m.end():]
+    nxt = re.search(r"^##\s", seg, re.M)
+    return seg[: nxt.start()] if nxt else seg
+
+
+def evidence_expected(text: str) -> dict[str, set[str]]:
+    """应有证据的条目（growth-metrics.md W_evid 分母）：§1 Object、§6 Mapping（按 object 名）、§4 backing=function 的 Rule。
+    返回 {"OBJECT": {...}, "MAPPING": {...}, "RULE": {...}}；某段找不到对应表 → 该 kind 为空集。"""
+    out: dict[str, set[str]] = {"OBJECT": set(), "MAPPING": set(), "RULE": set()}
+    for num, kind, head0, pick in ((1, "OBJECT", "name", None), (6, "MAPPING", "object", None), (4, "RULE", "name", "function")):
+        seg = _ir_section(text, num)
+        if seg is None:
             continue
-        if len(cells) >= 5:
-            total += 1
-            if cells[4].lower().startswith("verified"):
-                verified += 1
-    return (verified / total if total else None), verified, total
+        for header, rows in _md_tables(seg):
+            if not header or header[0] != head0:
+                continue
+            if kind == "RULE":
+                if "backing" not in header:
+                    continue
+                bi = header.index("backing")
+                out[kind] |= {r[0] for r in rows if len(r) > bi and r[bi].lower().startswith(pick) and not r[0].startswith("{{")}
+            else:
+                out[kind] |= {r[0] for r in rows if r and r[0] and not r[0].startswith("{{")}
+    return out
+
+
+def evidence_rate(ir_path: Path) -> dict:
+    """W_evid = §8 Evidence 里 status=verified 且属于应有证据集合的条目数 / 应有证据条目数（Object + Mapping + function-backed Rule）。
+
+    返回 {"W_evid", "verified", "expected", "table_rows", "by_kind", "denominator", "flags"}：
+      - 没有 §8 表 → W_evid None，flags 含 NO_EVIDENCE_TABLE（分母照常报告，知道「应有多少」）；
+      - 有 §8 但 §1/§4/§6 都解析不到（如只写了 §8 的测试 IR）→ 退回「verified 行 / 表行数」，flags 含 W_EVID_TABLE_DENOM；
+      - §8 里 kind 不在 OBJECT / MAPPING / RULE 的行（如 LINK）只计 table_rows，不进分子分母。
+    同一 (kind, element) 多行只算一次，任一行 verified 即 verified。"""
+    text = ir_path.read_text(encoding="utf-8")
+    expected = evidence_expected(text)
+    n_expected = sum(len(v) for v in expected.values())
+    res = {"W_evid": None, "verified": 0, "expected": n_expected, "table_rows": 0,
+           "by_kind": {k: {"expected": len(v), "verified": 0} for k, v in expected.items()},
+           "denominator": "structural", "flags": []}
+    seg = _ir_section(text, 8, "Evidence")
+    if seg is None:
+        res["flags"].append("NO_EVIDENCE_TABLE")
+        return res
+    status: dict[tuple[str, str], bool] = {}
+    for header, rows in _md_tables(seg):
+        if not header or header[0] not in ("element", "{{element}}"):
+            continue
+        ki = header.index("kind") if "kind" in header else 1
+        si = header.index("status") if "status" in header else 4
+        for r in rows:
+            if len(r) <= max(ki, si) or r[0].startswith("{{"):
+                continue
+            res["table_rows"] += 1
+            key = (r[ki].upper(), r[0])
+            status[key] = status.get(key, False) or r[si].lower().startswith("verified")
+    if n_expected == 0:
+        res["denominator"] = "table_rows"; res["flags"].append("W_EVID_TABLE_DENOM")
+        res["verified"] = sum(1 for v in status.values() if v)
+        res["expected"] = len(status)
+        res["W_evid"] = (res["verified"] / len(status)) if status else None
+        return res
+    for (kind, elem), ok in status.items():
+        if ok and kind in expected and elem in expected[kind]:
+            res["verified"] += 1; res["by_kind"][kind]["verified"] += 1
+    res["W_evid"] = res["verified"] / n_expected
+    return res
 
 
 def compute(rows: list[dict], theta_tier: float = 0.8) -> dict:
@@ -195,10 +265,11 @@ def main() -> None:
     if missing:
         reading["flags"].append(f"MISSING_RESULTS:{len(missing)}")
     if a.ir:
-        rate, v, t = evidence_rate(a.ir)
-        reading["W_evid"] = rate; reading["evidence_rows"] = {"verified": v, "total": t}
-        if rate is None:
-            reading["flags"].append("NO_EVIDENCE_TABLE")
+        ev = evidence_rate(a.ir)
+        reading["W_evid"] = ev["W_evid"]
+        reading["W_evid_n"] = {k: ev[k] for k in ("verified", "expected", "table_rows", "by_kind", "denominator")}
+        reading["evidence_rows"] = {"verified": ev["verified"], "total": ev["table_rows"]}   # 旧字段，向后兼容
+        reading["flags"].extend(ev["flags"])
     else:
         reading["W_evid"] = None; reading["flags"].append("W_EVID_NOT_COMPUTED")
     if a.elem_counts:

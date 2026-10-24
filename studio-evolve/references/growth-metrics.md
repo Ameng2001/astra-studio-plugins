@@ -69,6 +69,13 @@ W(h, D)      = (W_evid, W_family)                                               
 `W_elem` 只报告、不进闸门：条目数增长本身不是成长。进闸门的是两个比率。
 长胖的回退判定：`W_evid` 或 `W_family` 任一下降。这样「堆了一批没证据的条目」会被判为长胖回退而不是长胖。
 
+`W_evid` 的可计算口径（`growth_metrics.py compute --ir ontology-map.md`）：
+- 分母是**结构计数**，从 IR 正文数出来：§1 Objects 表的行数 + §6 Mapping 表的行数（按 object 名）+ §4 Rules 表里 `backing=function` 的行数；不是 §8 表的行数——否则「只探测一条、一条 verified」会得到 1.0。
+- 分子是 §8 Evidence 里 `status=verified` 且 (kind, element) 落在分母集合里的条目数；同一条目多行只算一次；`kind=LINK` 等不在分母的行只计 `table_rows`。
+- 读数里 `W_evid_n = {verified, expected, table_rows, by_kind, denominator}` 给出分子分母与分 kind 明细。
+- IR 没有 §8（`evolve-ground` 没跑过或数据源不可达）→ `W_evid = null` + `NO_EVIDENCE_TABLE`，分母照常报告；没给 `--ir` → `W_EVID_NOT_COMPUTED`。`gate_decide.py` 遇到任一侧 `W_evid` 为 null 时 ΔW 只看 `W_family`，verdict 记 `W_EVID_UNAVAILABLE`，不因算不出而通过或失败。
+- 提案补丁只改编译产物（插件代码）、不改 IR 时，hᵢ 与 h' 的 `W_evid` 相同、ΔW_evid = 0；要让证据率进闸门，提案必须连 IR §8 一起改（新增条目带探测行）。
+
 ---
 
 ## 成本 C(h, D)
