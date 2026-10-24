@@ -64,7 +64,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import load_cases, load_yaml  # noqa: E402
+from _common import apply_family_override, load_family_override, load_cases, load_yaml  # noqa: E402
 
 
 # ---------------------------------------------------------------- engine loading
@@ -316,6 +316,9 @@ def cmd_run(a) -> None:
         ids = set(map(str, y.get("ids", y.get("source_cases", y)) if isinstance(y, dict) else y))
     if a.case_ids:
         ids = (ids or set()) | {x.strip() for x in a.case_ids.split(",") if x.strip()}
+    n_override = apply_family_override(cases, load_family_override(a.family_override), key="id") if a.family_override else 0
+    if a.family_override:
+        print(f"family 覆盖 {n_override} 条（{a.family_override}）")
     todo = [cases[c] for c in sorted(cases) if ids is None or c in ids]
     missing = sorted((ids or set()) - set(cases))
     if missing:
@@ -413,6 +416,7 @@ def main() -> None:
     r.add_argument("--state", required=True, help="写进结果行的本体状态名（h_i / h_prime）")
     r.add_argument("--cases-dir", required=True, type=Path, help="案例目录（递归读全部 yaml；案例可带 setup 状态前置步骤，见模块说明）")
     r.add_argument("--case-ids"); r.add_argument("--cases-file", type=Path)
+    r.add_argument("--family-override", type=Path, help="yaml {case_id: family}：结果行的 family 按此表覆盖（与 holdout_sample / growth_metrics 同表），案例文件不改")
     r.add_argument("--repeat", type=int, default=1, help="每条跑几次（config.repeat_runs）")
     r.add_argument("--router", choices=["manual", "live"], default="manual")
     r.add_argument("--recordings", type=Path, help="manual：{口语: 意图JSON}")

@@ -28,7 +28,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import load_cases, load_yaml  # noqa: E402
+from _common import apply_family_override, load_family_override, load_cases, load_yaml  # noqa: E402
 
 
 def strat_key(case: dict, dims: list[str], median_date: str | None) -> tuple:
@@ -91,15 +91,7 @@ def main() -> None:
     if not real_dir.is_dir():
         sys.exit(f"没有 {real_dir}（留出集只能来自 real 案例）")
     cases = {k: v for k, v in load_cases(real_dir).items() if v.get("origin", "real") == "real"}
-    n_override = 0
-    if a.family_override:
-        ov = load_yaml(a.family_override)
-        ov = ov.get("families", ov) if isinstance(ov, dict) else {}
-        for cid, fam in (ov or {}).items():
-            if str(cid) in cases and fam:
-                if cases[str(cid)].get("family") != fam:
-                    n_override += 1
-                cases[str(cid)]["family"] = str(fam)
+    n_override = apply_family_override(cases, load_family_override(a.family_override), key="id") if a.family_override else 0
     excl: set[str] = set()
     if a.exclude_file:
         y = load_yaml(a.exclude_file)

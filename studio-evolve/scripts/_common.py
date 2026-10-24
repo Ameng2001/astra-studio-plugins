@@ -73,3 +73,27 @@ def fmt(x) -> str:
     if isinstance(x, float):
         return f"{x:.3f}"
     return str(x)
+
+
+def load_family_override(path) -> dict[str, str]:
+    """family override 表（2026-10-24）：yaml，顶层 `families: {case_id: family}` 或直接是映射 → {case_id: family}。
+    holdout_sample / runner_onto_engine / growth_metrics 三处共用同一读法，保证留出集分层与读数同键。"""
+    if not path:
+        return {}
+    ov = load_yaml(Path(path))
+    ov = ov.get("families", ov) if isinstance(ov, dict) else {}
+    return {str(k): str(v) for k, v in (ov or {}).items() if v}
+
+
+def apply_family_override(items, ov: dict[str, str], key: str = "case") -> int:
+    """就地覆盖 items（dict 列表或 {id: dict}）的 family；返回实际改变的条数。key 是 dict 里的 id 字段名（案例用 id，结果行用 case）。"""
+    n = 0
+    seq = items.values() if isinstance(items, dict) else items
+    for it in seq:
+        fam = ov.get(str(it.get(key)))
+        if fam:
+            if it.get("family") != fam:
+                n += 1
+            it["family"] = fam
+    return n
+

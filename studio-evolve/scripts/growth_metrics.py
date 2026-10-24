@@ -5,7 +5,10 @@
 
 用法
   growth_metrics.py compute --results results.jsonl --state h_prime [--cases-file ids.yaml | --case-ids a,b]
-                            [--ir ontology-map.md] [--elem-counts counts.json] [--theta-tier 0.8] --out readings.json
+                            [--ir ontology-map.md] [--elem-counts counts.json] [--theta-tier 0.8]
+                            [--family-override families.yaml] --out readings.json
+  --family-override（2026-10-24）：与 holdout_sample.py 同一张表 {case_id: family}，算 W_family 前覆盖结果行的 family，
+    使读数与留出集分层同键；读数记 family_override 路径与覆盖条数。T_k 只按 tier 分层，不受影响。round 1–6 的历史读数不重算。
   growth_metrics.py runner-spec        # 打印结果行（results.jsonl）的字段约定
 
 结果行约定（由案例运行器产出，一行 = 一次执行）：
@@ -40,7 +43,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import load_yaml, read_jsonl, scripts_hash, write_json  # noqa: E402
+from _common import apply_family_override, load_family_override, load_yaml, read_jsonl, scripts_hash, write_json  # noqa: E402
 
 # ---------------------------------------------------------------- runners
 def runner_jsonl(path: Path) -> list[dict]:
@@ -240,6 +243,7 @@ def main() -> None:
     c.add_argument("--ir", type=Path, help="ontology-map.md，算 W_evid（§8 Evidence 表）")
     c.add_argument("--elem-counts", type=Path, help="W_elem 分项计数 json（只报告）")
     c.add_argument("--theta-tier", type=float, default=0.8)
+    c.add_argument("--family-override", type=Path, help="yaml {case_id: family}：算 W_family 前覆盖结果行 family（与 holdout_sample 同表）")
     c.add_argument("--out", required=True, type=Path)
     sub.add_parser("runner-spec", help="打印结果行字段约定")
     a = ap.parse_args()
@@ -259,7 +263,10 @@ def main() -> None:
     if not sel:
         sys.exit(f"结果里没有 state={a.state!r} 的行" + (f"（限定 {len(ids)} 个案例）" if ids else ""))
     missing = (ids or set()) - {r.get("case") for r in sel}
+    n_override = apply_family_override(sel, load_family_override(a.family_override)) if a.family_override else 0
     reading = compute(sel, a.theta_tier)
+    reading["family_override"] = str(a.family_override) if a.family_override else None
+    reading["family_overridden"] = n_override
     reading["state"] = a.state
     reading["missing_cases"] = sorted(missing)
     if missing:
