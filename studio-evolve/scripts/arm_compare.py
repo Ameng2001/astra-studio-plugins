@@ -116,6 +116,13 @@ def reject_dim(verdict: dict) -> str:
     """3d 拒绝归属：首个不满足的判定式（T → S → W → C）；判不出来记 unknown。"""
     reasons = " ".join(str(x) for j in (verdict.get("inner"), *(verdict.get("outer") or []))
                        if isinstance(j, dict) for x in ((j.get("judge") or {}).get("reasons") or []))
+    # 2026-10-24：先认不属于任何一维回退的拒因——strict 无改善（文案里带「ΔC<0 不算」，以前被误归 C）、外关卡不过、Dᵢ 不可评分
+    if "无严格改善" in reasons or "strict" in reasons.lower():
+        return "strict"
+    if verdict.get("inner_pass") and verdict.get("outer_pass") is False:
+        return "outer"
+    if "UNSCORED" in reasons or "不可评分" in reasons:
+        return "unscored"
     for dim, pat in (("T", r"ΔT|T_\d|tier"), ("S", r"ΔS|S_"), ("W", r"ΔW|W_"), ("C", r"ΔC|cost|C_")):
         if re.search(pat, reasons):
             return dim
@@ -222,7 +229,7 @@ def main() -> None:
     div_1d_not_3d = [p for p in props if p["accepted"].get(ONE_D) and not p["accepted"].get(FULL)]
     div_3d_not_1d = [p for p in props if p["accepted"].get(FULL) and not p["accepted"].get(ONE_D)]
     rejected_3d = [p for p in props if FULL in p["accepted"] and not p["accepted"][FULL]]
-    share = {d: sum(1 for p in rejected_3d if p["reject_dim_3d"] == d) for d in ("T", "S", "W", "C", "unknown")}
+    share = {d: sum(1 for p in rejected_3d if p["reject_dim_3d"] == d) for d in ("T", "S", "W", "C", "strict", "outer", "unscored", "unknown")}
     n_min_arm = min(point[m]["n_accept"] for m in (FULL, ONE_D))
     res = {
         "n_proposals": len(props), "rounds": sorted({p["round"] for p in props}), "modes": modes,
