@@ -279,10 +279,11 @@ def main() -> None:
     reading["exec"] = "AUTO"
     write_json(a.out, reading)
     T = reading["T"]
+    _f = lambda x: "—" if x is None else f"{x:.3f}"
     print(f"✓ 读数 {a.state}：{reading['n_cases']} 案例 / {reading['n_rows']} 行 · "
-          f"T=({','.join('—' if T[k] is None else f'{T[k]:.2f}' for k in T)}) A={reading['A']:.3f} "
+          f"T=({','.join('—' if T[k] is None else f'{T[k]:.2f}' for k in T)}) A={_f(reading['A'])} "
           f"S_consist={'—' if reading['S_consist'] is None else f'{reading['S_consist']:.3f}'} "
-          f"S_stable={reading['S_stable']:.3f} W_evid={'—' if reading['W_evid'] is None else f'{reading['W_evid']:.3f}'} "
+          f"S_stable={_f(reading['S_stable'])} W_evid={'—' if reading['W_evid'] is None else f'{reading['W_evid']:.3f}'} "
           f"W_family={'—' if reading['W_family'] is None else f'{reading['W_family']:.3f}'} C={reading['C_gate']}"
           + (f"  flags={reading['flags']}" if reading["flags"] else ""))
     print(f"  → {a.out}")

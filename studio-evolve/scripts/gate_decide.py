@@ -11,6 +11,7 @@
   ΔT_k = T_k(h') − T_k(hᵢ)（只比两边都有读数的层）   ΔS = S_consist 差   ΔW = (W_evid 差, W_family 差)   ΔC = C_gate 差
   外关卡的 S 用完整 min(S_consist, S_holdout, S_stable)，其中 S_holdout(h') = 1 − max(0, A(hᵢ,B) − A(h',B))，S_holdout(hᵢ)=1。
   某一维两边都缺读数（None）→ 该维不参与判定并记 flag（不会因为算不出而「通过」或「失败」）。
+  候选侧不可评分行多于基线（引擎在 h' 上报错）→ 记 CAND_UNSCORED:+k，不改判定；外关卡只看不回退，缺读数的维度不参与，所以跑崩的候选可过外关卡——这是已登记的判据盲区。
   ΔW 的两个分量分别判：任一 < 0 即长胖回退，任一 > 0 即 strict；W_evid 任一侧缺 → 只看 W_family 并记 W_EVID_UNAVAILABLE。
 
 gate_mode（每条引用 gate-rules.md 条款；1d 系引用 OpsHarness arXiv 2608.25661 §V-C Eqs.9–11 的判定式）
@@ -87,6 +88,11 @@ def deltas(base: dict, cand: dict, outer: bool) -> dict:
         # 任一侧 W_evid 为 None（IR 无 §8 / 算读数时没给 --ir）→ ΔW 只看 W_family，不因算不出而通过或失败
         d["flags"].append("W_EVID_UNAVAILABLE")
     d["dW"] = dW
+    # 候选侧比基线多出的不可评分行（ENGINE_ERROR 等）：读数把它们排除在通过率外，判定式看不见「候选把引擎跑崩」。
+    # 只记 flag，不改判定（候选修法：多出的 UNSCORED 行计为 0 分，登记下次 amend）。
+    ub, uc = int(base.get("n_unscored") or 0), int(cand.get("n_unscored") or 0)
+    if uc > ub:
+        d["flags"].append(f"CAND_UNSCORED:+{uc - ub}")
     if base.get("A") is None or cand.get("A") is None:
         d["dA"] = None; d["flags"].append("A_MISSING")
     else:

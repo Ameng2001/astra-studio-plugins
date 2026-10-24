@@ -19,6 +19,7 @@ user-invocable: true
 | `runner_onto_engine.py` | 案例 → 引擎 `IntentCompiler` 路由 → `ActionEngine.validate` / `oql.execute` 预演执行 → `results.jsonl`；`golden-to-cases` 把 `cq/golden.yaml` 转成案例目录 | 引擎 cq.py 同路径 |
 | `growth_metrics.py compute` | 从案例执行结果（`results.jsonl`，字段见 `runner-spec`，`--runner onto-engine`）算 T_1..4 / A / S_consist / S_stable / W_family / C，`--ir` 给 ontology-map.md 时算 W_evid（§8 表 verified 比例） | growth-metrics.md |
 | `gate_decide.py` | 拿 hᵢ 与 h' 在 Dᵢ、B 上的两对读数，算增量、判 g_in / g_out，输出 §5 报告、`verdict.json`、台账行；`--gate-mode` 八种（见下） | gate-rules.md §1–§3、§5 |
+| `chain_drive.py` | P-B 独立链：一臂一条链，按 manifest 顺序把同一条提案流喂给它——沙箱 + patch -p1 → runner → growth_metrics → gate_decide；ACCEPT 才合入本臂状态，补丁打不上记 `PATCH_CONFLICT`；每轮末记链状态在 B_r / B_{r+1} 上的 A、T；`summarize` 出 F1 / T3 表。重放流近似（提案来自原始 3d 链的归因，各臂无自己的归因），结果为探索性 | criteria P-B、gate-rules §1–§3 |
 
 `gate_decide.py --gate-mode`：`3d`（正式，完整三维 + 成本）· `3d-noT` / `3d-noS` / `3d-noW`（消融）· `1d`（OpsHarness 式准确率 + 成本，arXiv 2608.25661 §V-C Eqs.9–11）· `1d-strict --delta δ`（一维加硬改善余量）· `none`（全接受）· `random --accept-rate p --seed s`（接受率匹配对照，可复现）。生产进化只用 `3d`；其余模式是论文（studio-paper）对照实验用，裁决为 ACCEPT 也不得合入生产 IR。
 
