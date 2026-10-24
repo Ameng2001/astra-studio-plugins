@@ -63,14 +63,20 @@ def resolve(ws: Path, p: str, prefer_ws: bool = True) -> Path:
 
 
 def sentences(text: str):
-    """yield (line_no, sentence)。跳过代码块、表格行、标题、图片行。"""
-    in_code = False
+    """yield (line_no, sentence)。跳过代码块、表格行、标题、图片行、参考文献段与文献条目行。"""
+    in_code = in_refs = False
     for ln, line in enumerate(text.splitlines(), 1):
         s = line.strip()
         if s.startswith("```"):
             in_code = not in_code
             continue
-        if in_code or not s or s.startswith(("|", "#", "![", "<!--")):
+        if s.startswith("#"):
+            # 参考文献段整段跳过：arXiv id / DOI 里的数字不是量化声称
+            in_refs = bool(re.match(r"(?i)^#+\s*(参考文献|references?|bibliography)\b", s))
+            continue
+        if in_code or in_refs or not s or s.startswith(("|", "![", "<!--")):
+            continue
+        if re.match(r"^[-*+]\s*\[[a-z]+\d{2}\]\s", s):   # 行内文献条目（- [key] 题目. 年份. 来源）
             continue
         s = re.sub(r"^([-*+]|\d+\.)\s+", "", s)
         # 中文句末直接切；英文 .!? 后须跟空白或行尾（避免切开 0.71 / e.g.）
