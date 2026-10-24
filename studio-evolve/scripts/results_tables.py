@@ -39,11 +39,11 @@ def judge(ok: bool | None, text: str, formal: bool) -> str:
 
 def t1(arms: dict, formal: bool) -> str:
     A, D = arms["arms"], arms["diffs"]
-    L = ["**T1 各臂接受率与回退率。**", "", "| 臂 | accept_rate | n_accept | regress_rate（净）| regress_any_rate（单条）| n_any_known | $A_{holdout}$ 全集 | $A_{holdout}$ 本体口径 |", "|---|---|---|---|---|---|---|---|"]
+    L = ["**T1 各臂接受率与回退率。**", "", "| 臂 | accept_rate | n_accept / n_judged | regress_rate（净）| regress_any_rate（单条）| n_any_known | $A_{holdout}$ 全集 | $A_{holdout}$ 本体口径 |", "|---|---|---|---|---|---|---|---|"]
     for m in ARMS:
         if m in A:
             a = A[m]
-            L.append(f"| {m} | {F(a['accept_rate'])} | {a['n_accept']} | {F(a['regress_rate'])} | {F(a['regress_any_rate'])} | {a['n_any_known']} | — | — |")
+            L.append(f"| {m} | {F(a['accept_rate'])} | {a['n_accept']} / {a.get('n_judged', '—')} | {F(a['regress_rate'])} | {F(a['regress_any_rate'])} | {a['n_any_known']} | — | — |")
     L += ["", "| 差值 | 点估计 | 95% CI | 判定 |", "|---|---|---|---|"]
     d = D.get("regress_rate_diff", {})
     ok = d.get("value") is not None and d["value"] >= 0.10 and d.get("ci95") and d["ci95"][0] > 0

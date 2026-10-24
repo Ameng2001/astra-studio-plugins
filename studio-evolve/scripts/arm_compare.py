@@ -19,7 +19,7 @@
     Apply(hᵢ,P) 上有一次不过（case_pass < 1）→ 1。用的是同一对读数里的 case_pass（growth_metrics 逐案例原题通过率）；读数没有
     case_pass 时该提案 regress_any = null 并打 REGRESS_ANY_UNAVAILABLE。净口径会让同层的修对盖住单条改错（round 5 P9c：B_5 上
     r08 由对变错，被 r73 / r74 修对抵消，净 A +0.025，regress = 0），单条口径看得见。
-  regress_rate(臂) = 臂接受集中 regress=1 的比例；regress_any_rate(臂) 同理按 regress_any；accept_rate(臂) = 接受数 / 提案数。
+  regress_rate(臂) = 臂接受集中 regress=1 的比例；regress_any_rate(臂) 同理按 regress_any；accept_rate(臂) = 接受数 / 该臂实际裁过的提案数（缺臂的提案不进分母，2026-10-24 修）。
   regress_rate_diff = rate(1d) − rate(3d)；regress_any_diff 同理；regress_rate_ablation_diff = rate(3d-noX) − rate(3d)；
   matched_diff = rate(random) − rate(3d)、rate(1d-strict) − rate(3d)（排除「只因为拒得多」）。
   分歧集：1d 接受 ∧ 3d 拒绝 → divergent_regress_rate；3d 接受 ∧ 1d 拒绝 → reverse_divergent_regress_rate。
@@ -189,8 +189,9 @@ def main() -> None:
     def arm_stats(sample: list[dict]) -> dict:
         st = {}
         for m in modes:
-            acc = [p for p in sample if p["accepted"].get(m)]
-            st[m] = {"accept_rate": len(acc) / len(sample) if sample else None, "n_accept": len(acc),
+            judged = [p for p in sample if m in p["accepted"]]   # 2026-10-24：分母只算该臂实际裁过的提案（缺臂不当拒绝）
+            acc = [p for p in judged if p["accepted"][m]]
+            st[m] = {"accept_rate": len(acc) / len(judged) if judged else None, "n_accept": len(acc), "n_judged": len(judged),
                      "regress_rate": rate([p["regress"] for p in acc]),
                      "regress_any_rate": rate([p["regress_any"] for p in acc if p["regress_any"] is not None]),
                      "n_any_known": sum(1 for p in acc if p["regress_any"] is not None)}
