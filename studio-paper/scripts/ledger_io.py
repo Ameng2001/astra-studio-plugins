@@ -111,6 +111,8 @@ def formal_blockers(run: dict, cfg: dict, lock_ok: bool, criteria: dict | None =
         b.append(f"contamination 须为 {sorted(CONTAMINATION)}")
     if run.get("confounded"):
         b.append("confounded=true（一次对比变了多个因素）")
+    if run.get("kind") == "pilot":
+        b.append("kind=pilot（试运行 / 事后补充分析不作 formal 证据，固定记探索性）")
     if run.get("status") == "failed":
         b.append("status=failed")
     return b
