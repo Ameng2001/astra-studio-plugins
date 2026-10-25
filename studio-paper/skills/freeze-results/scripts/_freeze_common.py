@@ -86,6 +86,28 @@ def load_figure_plan(ws: Path) -> list[dict]:
     return items
 
 
+def load_verdicts(ws: Path) -> dict[str, str]:
+    """ledger/hypotheses.md（rollup_hypotheses.py 生成）里 RQ 级（H 列为 —）的判定，如 {"RQ-1": "证伪"}。
+    caption 用它写「台账判定」，避免冻结后的图表只剩预注册的预期形状；没有该文件或台账比它新时返回空。"""
+    p = ws / "ledger" / "hypotheses.md"
+    led = ws / "ledger" / "runs.jsonl"
+    if not p.exists() or (led.exists() and led.stat().st_mtime > p.stat().st_mtime):
+        return {}
+    out = {}
+    for line in p.read_text(encoding="utf-8").splitlines():
+        c = [x.strip() for x in line.strip().strip("|").split("|")]
+        if len(c) >= 3 and RQ_RE.fullmatch(c[0]) and c[1] in ("—", "-", ""):
+            out[c[0]] = c[2].strip("*")
+    return out
+
+
+def expected_and_verdict(shape: str, verdict: str | None) -> str:
+    """caption 里的「预期」段：标明是预注册预期，并并排写台账判定。"""
+    parts = [f"预注册预期：{shape}"] if shape else []
+    parts.append(f"台账判定：{verdict}（ledger/hypotheses.md）" if verdict else "台账判定：未生成（先跑 rollup_hypotheses.py）")
+    return "；".join(parts)
+
+
 def run_rqs(run: dict) -> list[str]:
     rq = run.get("rq") or []
     return [rq] if isinstance(rq, str) else list(rq)

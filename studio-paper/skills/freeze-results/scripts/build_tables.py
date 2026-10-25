@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paper_ws import load_config, load_status, now_iso, workspace  # noqa: E402
 from ledger_io import effective_runs, formal_blockers, ledger_hash  # noqa: E402
-from _freeze_common import (fmt_ci, load_figure_plan, load_rqs, n_range,  # noqa: E402
+from _freeze_common import (expected_and_verdict, fmt_ci, load_figure_plan, load_verdicts, load_rqs, n_range,  # noqa: E402
                             run_rqs, seeds_of, seeds_range)
 
 COLS = ["run_id", "kind", "metric", "value", "ci", "n", "seeds", "commit", "owner"]
@@ -66,6 +66,9 @@ def main() -> int:
     for old in list(tdir.glob("RQ-*.md")) + list(fdir.glob("RQ-*.csv")):
         old.unlink()  # 生成物：每次全量重建，避免残留旧表
 
+    verdicts = load_verdicts(ws)
+    if not verdicts:
+        print("⚠ ledger/hypotheses.md 缺失或旧于台账：caption 的「台账判定」会写「未生成」—— 先跑 rollup_hypotheses.py")
     written_tables, written_figs = [], []
     for rq in rqs:
         rid = rq["id"]
@@ -77,7 +80,7 @@ def main() -> int:
         tab_ids = "/".join(p["id"] for p in tabs) or "（figure-plan 未规划）"
         content = "；".join(p["content"] for p in tabs) or (rq.get("question") or "")
         shape = "；".join(p["shape"] for p in tabs)
-        caption = (f"表 {tab_ids}：{rid} {content}" + (f"（{shape}）" if shape else "")
+        caption = (f"表 {tab_ids}：{rid} {content}（{expected_and_verdict(shape, verdicts.get(rid))}）"
                    + f"；n={n_range(rr)}，seeds={seeds_range(rr)}，区间=95% CI；"
                    f"仅含 formal 行（{len(rr)} 条），来源 ledger/runs.jsonl。")
         body = ["<!-- 由 build_tables.py 从 ledger/runs.jsonl 生成，勿手改；改数据 = 改台账后重跑（生成时间见 results/build.json） -->",

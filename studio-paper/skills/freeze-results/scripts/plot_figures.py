@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 from paper_ws import workspace, now_iso, sha256_file  # noqa: E402
+from _freeze_common import expected_and_verdict, load_verdicts  # noqa: E402
 
 FALLBACK_RC = {
     "figure.figsize": (3.5, 2.6), "figure.dpi": 150, "font.size": 8, "axes.labelsize": 8,
@@ -141,6 +142,7 @@ def main() -> int:
         print("缺 matplotlib：pip install matplotlib scienceplots"); return 2
     styles, style_src = choose_style(a.style)
     formats = [f.strip() for f in a.format.split(",") if f.strip()]
+    verdicts = load_verdicts(ws)
     figs, caps = [], ["# 图 caption（plot_figures.py 生成；写作时原样引用，不得改数字）", ""]
     for p in csvs:
         rows = load_rows(p)
@@ -151,7 +153,7 @@ def main() -> int:
             info = plot_group(fig_id, frs, fdir / f"{p.stem}-{fig_id}", formats, a.dpi)
             info.update({"rq": p.stem, "content": frs[0].get("fig_content", ""), "expected": frs[0].get("expected_shape", "")})
             figs.append(info)
-            caps.append(f"**图 {fig_id}（{p.stem}）：{info['content']}。** 预期：{info['expected']}；n={info['n']}，seeds={info['seeds']}，"
+            caps.append(f"**图 {fig_id}（{p.stem}）：{info['content']}。** {expected_and_verdict(info['expected'], verdicts.get(p.stem))}；n={info['n']}，seeds={info['seeds']}，"
                         f"区间={info['ci']}；仅含 formal 行（{info['runs']} 条，指标 {', '.join(info['metrics'])}），来源 {p.name}。")
             caps.append("")
     (fdir / "captions.md").write_text("\n".join(caps), encoding="utf-8")
