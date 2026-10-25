@@ -196,8 +196,16 @@ def declared_metrics(ws, rid: str, h_ids) -> set:
     from paper_ws import read_yaml_lite
     crit = (read_yaml_lite(p) or {}).get("criteria") or {}
     names = set()
-    for key in [rid, *(h_ids or [])]:
+    num = rid.split("-", 1)[1] if "-" in rid else rid
+    h_keys = [k for k in crit if str(k).startswith(f"H-{num}") and str(k)[len(f"H-{num}"):].isalpha()]  # H-1a / H-1b 归 RQ-1
+    for key in dict.fromkeys([rid, *(h_ids or []), *h_keys]):
         c = crit.get(key) or {}
+        ftm = c.get("fail_to_measure_when") if isinstance(c.get("fail_to_measure_when"), dict) else {}
+        for cond in ftm.values():   # 机读的功效不足条件引用的量也是预登记的（criteria v5 机读化补注）
+            if isinstance(cond, dict):
+                for k in ("metric", "missing"):
+                    if cond.get(k):
+                        names.add(str(cond[k]))
         for part in ("pass", "fail"):
             m = (c.get(part) or {}).get("metric") if isinstance(c.get(part), dict) else None
             if m:
