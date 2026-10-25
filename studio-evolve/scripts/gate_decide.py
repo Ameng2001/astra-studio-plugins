@@ -49,6 +49,14 @@ def load_reading(p: Path) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def as_of_flag(base: dict, cand: dict) -> str | None:
+    """日期漂移守卫（2026-10-25）：插件按运行当天定「今天」，同一状态隔天跑会翻转；两侧读数的运行日期不同 → AS_OF_MISMATCH。"""
+    a, b = base.get("as_of"), cand.get("as_of")
+    if a is None or b is None:
+        return "AS_OF_UNKNOWN"
+    return None if a == b and len(a) == 1 else f"AS_OF_MISMATCH:{'/'.join(a)}→{'/'.join(b)}"
+
+
 def deltas(base: dict, cand: dict, outer: bool) -> dict:
     d: dict = {"flags": []}
     dT = {}
@@ -93,6 +101,9 @@ def deltas(base: dict, cand: dict, outer: bool) -> dict:
     ub, uc = int(base.get("n_unscored") or 0), int(cand.get("n_unscored") or 0)
     if uc > ub:
         d["flags"].append(f"CAND_UNSCORED:+{uc - ub}")
+    f = as_of_flag(base, cand)
+    if f:
+        d["flags"].append(f)   # 只记 flag，不改判定（判据冻结）
     if base.get("A") is None or cand.get("A") is None:
         d["dA"] = None; d["flags"].append("A_MISSING")
     else:

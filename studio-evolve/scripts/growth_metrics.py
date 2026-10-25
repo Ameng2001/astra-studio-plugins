@@ -268,6 +268,7 @@ def main() -> None:
     reading["family_override"] = str(a.family_override) if a.family_override else None
     reading["family_overridden"] = n_override
     reading["state"] = a.state
+    reading["as_of"] = sorted({str(r.get("as_of")) for r in sel if r.get("as_of")}) or None   # 运行日期（runner 2026-10-25 起记）；None = 旧结果无记录
     reading["missing_cases"] = sorted(missing)
     if missing:
         reading["flags"].append(f"MISSING_RESULTS:{len(missing)}")

@@ -116,7 +116,8 @@ class Chain:
         r = sh([PY, str(HERE / "runner_onto_engine.py"), "run", "--engine-root", self.a.engine_root, "--target-dir", str(target),
                 "--ontology", self.m["ontology"], "--state", label, "--cases-dir", self.a.cases_dir, "--cases-file", str(ids_file),
                 "--repeat", str(self.a.repeat), "--router", "manual", "--recordings", self.a.recordings, "--out", str(res)]
-               + (["--family-override", self.a.family_override] if self.a.family_override else []))
+               + (["--family-override", self.a.family_override] if self.a.family_override else [])
+               + (["--as-of", self.a.as_of] if self.a.as_of else []))
         if r.returncode != 0:
             sys.exit(f"runner 失败 [{tag}]:\n{r.stderr[-1500:]}")
         out = self.work / "readings" / f"{tag}.json"
@@ -210,7 +211,7 @@ class Chain:
                "steps": self.steps, "rounds": [self.rounds[k] for k in sorted(self.rounds)], "final": final,
                "accepted": [s["id"] for s in self.steps if s.get("merged")],
                "n_judged": sum(1 for s in self.steps if s.get("decision")), "n_conflict": sum(1 for s in self.steps if s.get("patch") == "PATCH_CONFLICT"),
-               "final_state": dir_hash(self.state_dir(self.state_root)), "script_hash": scripts_hash(), "exec": "AUTO", "family_override": self.a.family_override}
+               "final_state": dir_hash(self.state_dir(self.state_root)), "script_hash": scripts_hash(), "exec": "AUTO", "family_override": self.a.family_override, "as_of": self.a.as_of}
         write_json(self.work / "chain.json", out)
         print(f"✓ 链 {self.a.gate_mode}：判 {out['n_judged']} 条，接受 {len(out['accepted'])} 条 {out['accepted']}，冲突 {out['n_conflict']} → {self.work / 'chain.json'}")
 
@@ -270,6 +271,7 @@ def main():
     r.add_argument("--accept-rate", type=float)
     r.add_argument("--seed", type=int)
     r.add_argument("--final-sets", help="逗号分隔，相对 sets_root")
+    r.add_argument("--as-of", help="YYYY-MM-DD：透传给 runner，固定运行日期（链上所有读数同一天口径）")
     r.add_argument("--family-override", help="yaml {case_id: family}，透传给 runner 与 growth_metrics（2026-10-24；与 holdout_sample 同表，读数与留出集同键）")
     s = sub.add_parser("summarize")
     s.add_argument("--chains", nargs="+", type=Path, required=True)

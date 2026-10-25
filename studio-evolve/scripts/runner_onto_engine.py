@@ -67,6 +67,45 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import apply_family_override, load_family_override, load_cases, load_yaml  # noqa: E402
 
 
+# ---------------------------------------------------------------- 固定日期（2026-10-25）
+def freeze_date(as_of: str) -> None:
+    """把标准库时钟固定在 as_of：date.today() = 该日；datetime.now() 从该日 12:00（或 as_of 给出的 THH:MM）起算，
+    按进程内真实流逝的时间前进（同一次运行里时间戳仍递增，写入键不撞车）。日期与时刻都固定——插件里既有「今天」也有「过去 24 小时」。
+    必须在引擎与插件导入**之前**调用：插件用 `from datetime import date, datetime` 在导入时绑定类，模块级的 TODAY 也在导入时求值。
+    不改插件代码；只影响本进程。"""
+    import datetime as _m
+    import time as _t
+    real_date, real_dt = _m.date, _m.datetime
+    start = real_dt.fromisoformat(as_of if "T" in as_of else as_of + "T12:00")
+    t0 = _t.monotonic()
+
+    def _cur():
+        return start + _m.timedelta(seconds=_t.monotonic() - t0)
+
+    class FrozenDate(real_date):
+        @classmethod
+        def today(cls):
+            d = _cur().date()
+            return cls(d.year, d.month, d.day)
+
+    class FrozenDateTime(real_dt):
+        @classmethod
+        def now(cls, tz=None):
+            t = _cur()
+            t = cls(t.year, t.month, t.day, t.hour, t.minute, t.second, t.microsecond)
+            return t.replace(tzinfo=tz) if tz else t
+
+        @classmethod
+        def today(cls):
+            return cls.now()
+
+        @classmethod
+        def utcnow(cls):
+            return cls.now()
+
+    _m.date, _m.datetime = FrozenDate, FrozenDateTime
+
+
 # ---------------------------------------------------------------- engine loading
 def load_engine(engine_root: Path):
     sys.path.insert(0, str(engine_root))
@@ -293,6 +332,9 @@ def apply_setup(engine, ontology: str, steps, Actor, default_role: str) -> tuple
 
 
 def cmd_run(a) -> None:
+    run_date = a.as_of or dt.datetime.now().strftime("%Y-%m-%dT%H:%M")
+    if a.as_of:
+        freeze_date(a.as_of)
     spi = load_engine(a.engine_root)
     plugin = load_plugin(a.target_dir)
     from clife_onto_engine.intent.compiler import IntentCompiler
@@ -330,7 +372,7 @@ def cmd_run(a) -> None:
     a.out.parent.mkdir(parents=True, exist_ok=True)
     with a.out.open("a" if a.append else "w", encoding="utf-8") as fh:
         for c in todo:
-            base = {"state": a.state, "case": c["id"], "tier": int(c.get("tier", 0)), "family": c.get("family"),
+            base = {"state": a.state, "case": c["id"], "as_of": run_date, "tier": int(c.get("tier", 0)), "family": c.get("family"),
                     "origin": c.get("origin", "real"), "observed_at": str(c.get("observed_at", ""))}
             utterances = [(None, c["q"])] + [(f"{v.get('kind', 'variant')}-{i}", v["q"]) for i, v in enumerate(c.get("variants") or []) if isinstance(v, dict) and v.get("q")]
             setup = c.get("setup") or []
@@ -423,6 +465,7 @@ def main() -> None:
     r.add_argument("--llm-config", default=None, help="live：llm.local.json 路径（缺省读 env）")
     r.add_argument("--actor-role", default="医师")
     r.add_argument("--out", required=True, type=Path)
+    r.add_argument("--as-of", help="YYYY-MM-DD[THH:MM]：把运行时钟固定在这一刻（缺省时刻 12:00；插件的「今天」「过去 24 小时」与种子日期都随之固定），读数可跨天复现；缺省 = 真实时钟。结果行记 as_of", default=None)
     r.add_argument("--append", action="store_true")
     r.add_argument("--verbose", "-v", action="store_true")
     r.set_defaults(fn=cmd_run)
