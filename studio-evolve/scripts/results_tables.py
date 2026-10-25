@@ -53,8 +53,9 @@ def t1(arms: dict, formal: bool) -> str:
         L.append(f"| {lab} | {F(d.get('value'))} | {CI(d.get('ci95'))} | 排除「只因为拒得多」 |")
     d = D.get("regress_any_diff", {})
     L.append(f"| regress_any_diff（1d − 3d，并排） | {F(d.get('value'))} | {CI(d.get('ci95'))} | 不判定 |")
-    basis = Counter(p.get("regress_basis") for p in arms.get("proposals", []))
-    L += ["", f"回退口径：B_next {basis.get('B_next', 0)} 条 / B_same {basis.get('B_same', 0)} 条（协议要求 B_{{i+1}}；B_same 的行记 REGRESS_ON_SAME_B）。flags：{', '.join(arms.get('flags', [])) or '无'}。$A_{{holdout}}$ 两列由 formal run 的留出集读数填，本脚本不算。"]
+    basis = Counter(("B_next" if str(p.get("regress_basis", "")).startswith("B_next") else p.get("regress_basis")) for p in arms.get("proposals", []))
+    x3 = any(str(p.get("regress_basis", "")) == "B_next_x3" for p in arms.get("proposals", []))
+    L += ["", f"回退口径：B_next {basis.get('B_next', 0)} 条{'（每轮三次重抽，按（提案, 重抽）对合并）' if x3 else ''} / B_same {basis.get('B_same', 0)} 条（协议要求 B_{{i+1}}；B_same 的行记 REGRESS_ON_SAME_B）。flags：{', '.join(arms.get('flags', [])) or '无'}。$A_{{holdout}}$ 两列由 formal run 的留出集读数填，本脚本不算。"]
     return "\n".join(L)
 
 
@@ -109,7 +110,7 @@ def t4(arms: dict, formal: bool) -> str:
 def t5(arms: dict, props: dict, holdouts: list[Path], window_sets: list[Path], cases_dir: Path | None) -> str:
     P = arms.get("proposals", [])
     kinds = {"root": "(i) 反馈归因 · 根因修复", "naive": "(i) 反馈归因 · 朴素修复", "impl": "(ii) 路由 error 行（构造性，不计分歧集）"}
-    L = ["**T5 提案入口、朴素臂与窗口来源。**", "", "| 入口 / 类型 | 提案数 | 3d 接受 | 1d 接受 | 回退（净 / 单条）| 已合入 |", "|---|---|---|---|---|---|"]
+    L = ["**T5 提案入口、朴素臂与窗口来源。**", "", "| 入口 / 类型 | 提案数 | 3d 接受 | 1d 接受 | 回退（净 / 单条；三次重抽时为三份均值之和）| 已合入 |", "|---|---|---|---|---|---|"]
     # 同一提案多次 attempt 只取最后一次
     last = {}
     for p in P:
@@ -119,7 +120,8 @@ def t5(arms: dict, props: dict, holdouts: list[Path], window_sets: list[Path], c
         n3 = sum(1 for p in rows if p["accepted"].get("3d")); n1 = sum(1 for p in rows if p["accepted"].get("1d"))
         reg = sum(p["regress"] or 0 for p in rows); rga = sum(p["regress_any"] or 0 for p in rows if p["regress_any"] is not None)
         merged = sum(1 for n in last if props.get(int(n), {}).get("kind") == k and props[int(n)].get("merged"))
-        L.append(f"| {lab} | {len(rows)} | {n3} | {n1} | {reg} / {rga} | {merged} |")
+        fm = lambda v: f"{v:.2f}" if isinstance(v, float) and not float(v).is_integer() else str(int(v)) if isinstance(v, float) else str(v)
+        L.append(f"| {lab} | {len(rows)} | {n3} | {n1} | {fm(reg)} / {fm(rga)} | {merged} |")
     unreg = [n for n in last if int(n) not in props]
     if unreg:
         L.append(f"| 未登记（proposals.yaml 缺） | {len(unreg)} | — | — | — | — |")
