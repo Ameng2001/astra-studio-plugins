@@ -60,7 +60,9 @@ criteria:                             # proposal/criteria.yaml
    `python3 $S/import_evolve_ledger.py <paper-id> .studio-evolve/<id>/ledger/growth-ledger.md --map "T=RQ-1,S=RQ-2,W=RQ-3,C=RQ-4" --contamination excluded [--include-baseline] [--dry-run]`
    每轮 → `T_tier1..4`、`S`（三分量取最小，note 注明哪个）、`W_evid`、`C_tok` 各一行；n = window 列；重复导入按 (source, 文件, round, metric) 跳过。映射可写进 `config.yaml` 的 `ledger.evolve_map` 免传。
 5. 作废（只追加 tombstone，原行保留）：`python3 $S/record_run.py <paper-id> --void <run_id> --reason "..."`
-6. 单独重算：`python3 $S/rollup_hypotheses.py <paper-id>`（确定性；总是 exit 0；打印偏离条数）。
+6. 单独重算：`python3 $S/rollup_hypotheses.py <paper-id>`（确定性；总是 exit 0；打印未处置 / 已处置偏离条数）。
+   - criteria 的 `fail_to_measure_when`（键控 map：`{metric, op, value}` 阈值 / `{missing: 指标}` / `{requires: RQ-x, verdict: 支持}`）任一命中 → 该 RQ / H 记「无法判定」，不进 drift；RQ 级命中时其下假设一并无法判定。阈值条件用的量（如分歧集条数、CI 半宽）照常作为 formal run 入账。
+   - 导师对偏离的处置写进 `ledger/dispositions.yaml`（键 RQ 或 RQ/H，含 choice / by / date / doc / followup）；已处置的偏离在 drift.md 单列，未处置为 0 时写「无偏离」，freeze-results 据此放行。不手工删 drift 条目。
 7. 打印出「论点偏离 N 条」且 N > 0 → 把 `ledger/drift.md` 指给导师，请其三选一；不阻塞入账，但 freeze-results 要求偏离已处置。
 
 ## Example

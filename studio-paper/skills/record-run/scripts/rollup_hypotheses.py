@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from paper_ws import workspace, load_config, load_status, save_status, now_iso  # noqa: E402
 from ledger_io import effective_runs, read_runs, formal_blockers  # noqa: E402
-from record_common import lock_status, load_rqs, load_criteria, evaluate, fmt_cond  # noqa: E402
+from record_common import lock_status, load_rqs, load_criteria, evaluate, fmt_cond, fail_to_measure, load_dispositions  # noqa: E402
 
 DRIFT_OPTIONS = (
     "- [ ] **改 claim**：收窄论点句，使其与该证伪结果相容（回 position-paper，需导师重签 thesis）\n"
@@ -54,10 +54,27 @@ def rollup(paper_id: str) -> dict:
     voided = sorted((r for r in latest.values() if r.get("status") == "void"), key=lambda r: r["run_id"])
 
     rq_ids = list(rqs) or sorted({q for r in runs for q in (r.get("rq") or [])})
+    disp = load_dispositions(ws)
+    # 第一遍：阈值判定（fail_to_measure_when 的 requires 依赖这些 RQ 级判定）
+    base = {rq: (evaluate(crits[rq], _runs_for(formal, rq)) if crits.get(rq) else
+                 {"verdict": "待定", "why": "criteria.yaml 无此 RQ 判据", "used": [], "value": None}) for rq in rq_ids}
+    verdicts = {rq: ev["verdict"] for rq, ev in base.items()}
+
+    def ftm(ev, res):
+        hits, used = res
+        if not hits:
+            return ev
+        return {**ev, "verdict": "无法判定", "why": "fail_to_measure：" + "；".join(hits) + f"（阈值比对：{ev['why']}）",
+                "used": sorted(set(ev["used"]) | set(used))}
+
+    def cat(a, b):
+        return a[0] + b[0], a[1] + b[1]
+
     results, drifts = [], []
     for rq in rq_ids:
         c = crits.get(rq) or {}
-        ev = evaluate(c, _runs_for(formal, rq)) if c else {"verdict": "待定", "why": "criteria.yaml 无此 RQ 判据", "used": [], "value": None}
+        rq_hits = fail_to_measure(c, _runs_for(formal, rq), verdicts)
+        ev = ftm(base[rq], rq_hits)
         results.append((rq, None, c, ev))
         if ev["verdict"] == "证伪":
             drifts.append((rq, None, c, ev))
@@ -65,11 +82,13 @@ def rollup(paper_id: str) -> dict:
             hc = crits.get(h)
             if hc:
                 hev = evaluate(hc, _runs_for(formal, rq, h))
+                hev = ftm(hev, cat(rq_hits, fail_to_measure(hc, _runs_for(formal, rq, h), verdicts)))
             else:
                 hev = {**ev, "why": f"继承 {rq}：{ev['why']}"}
             results.append((rq, h, hc or c, hev))
             if hc and hev["verdict"] == "证伪":
                 drifts.append((rq, h, hc, hev))
+    open_drifts = [d for d in drifts if (f"{d[0]}/{d[1]}" if d[1] else d[0]) not in disp]
 
     # 覆盖矩阵
     known = set(rq_ids)
@@ -108,11 +127,12 @@ def rollup(paper_id: str) -> dict:
     (ws / "ledger").mkdir(exist_ok=True)
     (ws / "ledger" / "hypotheses.md").write_text("\n".join(L) + "\n", encoding="utf-8")
 
-    D = [f"# 论点偏离 — {paper_id}", "", f"> rollup_hypotheses.py 自动生成于 {now_iso()}。formal 证据落入 fail 判据即记偏离；不阻塞入账，但 freeze-results 要求偏离已处置。", ""]
-    if not drifts:
-        D.append("无偏离")
+    D = [f"# 论点偏离 — {paper_id}", "", f"> rollup_hypotheses.py 自动生成于 {now_iso()}。formal 证据落入 fail 判据即记偏离；不阻塞入账，但 freeze-results 要求偏离已处置。"
+         "处置记录在 `ledger/dispositions.yaml`；fail_to_measure_when 命中的项记「无法判定」，不进本文件。", ""]
+    if not open_drifts:
+        D.append("无偏离（未处置 0 条）" + (f"；已处置 {len(drifts)} 条见下" if drifts else ""))
     thesis = ws / "positioning" / "thesis.md"
-    for rq, h, c, ev in drifts:
+    for rq, h, c, ev in open_drifts:
         q = (rqs.get(rq) or {}).get("question", "")
         label = f"{rq}/{h}" if h else rq
         D += [f"## 论点偏离：{label}", "",
@@ -121,6 +141,17 @@ def rollup(paper_id: str) -> dict:
               f"- 证据 run：{', '.join(ev['used'])}",
               f"- 对照论点句：`{thesis.relative_to(ws)}`" + ("" if thesis.exists() else "（尚不存在）"),
               "", "处置（导师选一项并签字记录）：", "", DRIFT_OPTIONS]
+    done = [d for d in drifts if d not in open_drifts]
+    if done:
+        D += ["", "## 已处置", ""]
+        for rq, h, c, ev in done:
+            label = f"{rq}/{h}" if h else rq
+            x = disp[label]
+            D += [f"- **{label}**：{x.get('choice', '—')}（{x.get('by', '—')}，{x.get('date', '—')}，依据 `{x.get('doc', '—')}`）；证据 run {', '.join(ev['used'])}"
+                  + (f"；落实：{x['followup']}" if x.get("followup") else "")]
+    stale = [k for k in disp if k not in {(f"{d[0]}/{d[1]}" if d[1] else d[0]) for d in drifts}]
+    if stale:
+        D += ["", "## 处置记录里已不再是偏离的项", ""] + [f"- **{k}**：{disp[k].get('choice', '—')}（依据 `{disp[k].get('doc', '—')}`）——当前判定已不构成偏离" for k in stale]
     (ws / "ledger" / "drift.md").write_text("\n".join(D) + "\n", encoding="utf-8")
 
     if (ws / "status.json").exists():
@@ -133,7 +164,7 @@ def rollup(paper_id: str) -> dict:
         })
         save_status(ws, st)
     covered = [q for q in rq_ids if rows[q]["formal"]]
-    return {"drift": len(drifts), "covered": covered, "rqs": rq_ids, "results": results}
+    return {"drift": len(open_drifts), "drift_disposed": len(drifts) - len(open_drifts), "covered": covered, "rqs": rq_ids, "results": results}
 
 
 def main() -> None:
@@ -145,7 +176,7 @@ def main() -> None:
     except SystemExit as e:  # 永远 exit 0：rollup 失败不影响已入账的行
         print(f"rollup 未完成：{e}")
         return
-    print(f"rollup 完成：RQ 覆盖 {len(res['covered'])}/{len(res['rqs'])}；论点偏离 {res['drift']} 条"
+    print(f"rollup 完成：RQ 覆盖 {len(res['covered'])}/{len(res['rqs'])}；论点偏离 {res['drift']} 条未处置、{res['drift_disposed']} 条已处置"
           + ("（见 ledger/drift.md，请提示导师）" if res["drift"] else ""))
 
 

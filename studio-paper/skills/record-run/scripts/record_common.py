@@ -23,6 +23,20 @@ proposal/criteria.yaml 形状（每个 RQ 一个 pass 与一个 fail；可选按
         pass: {metric: T_tier3, op: ">=", value: 0.75}
         fail: {metric: T_tier3, op: "<", value: 0.5}
 
+可选 fail_to_measure_when（键控 map，任一命中 → 该 RQ / H 记「无法判定」，不记支持也不记证伪、不进 drift）::
+
+      RQ-3:
+        fail_to_measure_when:
+          no_w_evid: {missing: W_evid}                 # 该 RQ 已有 formal run，但没有任何 W_evid 读数
+          rq1_not_supported: {requires: RQ-1, verdict: 支持}   # 依赖的 RQ 判定不是「支持」
+          underpowered: {metric: n_accept_min, op: "<", value: 30}   # 指标阈值（formal run 取 mean）
+      RQ 级命中时其下全部假设一并记「无法判定」；H 级可另写自己的条件。只在该 RQ 有 formal run 时才求值。
+
+ledger/dispositions.yaml（可选）：导师对 drift 的处置，键为 RQ 或 RQ/H::
+
+    dispositions:
+      RQ-1: {choice: 改 claim, by: 王老师, date: "2026-10-25", doc: proposal/advisor-drift-disposition-2026-10-25.md, followup: "thesis v3 待重签"}
+
 proposal/criteria.lock：JSON，至少含 {"hash": "sha256:<criteria.yaml 文本的 sha256>"}。
 """
 from __future__ import annotations
@@ -136,3 +150,40 @@ def evaluate(crit: dict, runs: list[dict]) -> dict:
     else:
         verdict, why = "待定", f"{agg}={v:.4g} 介于 pass 与 fail 之间"
     return {"verdict": verdict, "why": why, "used": [r["run_id"] for r in used], "value": v}
+
+
+def fail_to_measure(crit: dict, runs: list[dict], verdicts: dict) -> tuple[list[str], list[str]]:
+    """criteria 的 fail_to_measure_when 命中项（文字说明, 依据 run_id）；runs 已按 rq/h 过滤、只含 formal。无 formal run 时不求值。"""
+    conds = (crit or {}).get("fail_to_measure_when") or {}
+    ev_runs = [r for r in runs if r.get("kind") in EVIDENCE_KINDS]
+    if not isinstance(conds, dict) or not ev_runs:
+        return [], []
+    hits, used = [], []
+    for name, c in conds.items():
+        if not isinstance(c, dict):
+            continue
+        if "requires" in c:
+            need, got = str(c.get("verdict", "支持")), verdicts.get(str(c["requires"]))
+            if got is not None and got != need:
+                hits.append(f"{name}：{c['requires']} 判定为「{got}」，本项须其为「{need}」")
+        elif "missing" in c:
+            m = str(c["missing"])
+            if not any((r.get("metric") or {}).get("name") == m and isinstance((r.get("metric") or {}).get("value"), (int, float)) for r in ev_runs):
+                hits.append(f"{name}：无 {m} 的 formal 读数")
+        elif "metric" in c:
+            rs = [r for r in ev_runs if (r.get("metric") or {}).get("name") == c["metric"]
+                  and isinstance((r.get("metric") or {}).get("value"), (int, float))]
+            if rs:
+                v = statistics.fmean(r["metric"]["value"] for r in rs)
+                if check(c, v):
+                    hits.append(f"{name}：{c['metric']}={v:.4g}（{fmt_cond(c)}）")
+                    used += [r["run_id"] for r in rs]
+    return hits, used
+
+
+def load_dispositions(ws: Path) -> dict:
+    p = ws / "ledger" / "dispositions.yaml"
+    if not p.exists():
+        return {}
+    d = (read_yaml_lite(p) or {}).get("dispositions") or {}
+    return {str(k): v for k, v in d.items() if isinstance(v, dict)}
