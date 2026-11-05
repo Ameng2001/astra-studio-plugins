@@ -1,6 +1,6 @@
 {
   "name": "paper-studio-team",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A seven-role research studio for empirical computer-science papers: positioning against the nearest work, frozen pass/fail criteria, an append-only run ledger, result tables built only from formal runs, simulated peer review, submission checks and rebuttal",
   "author": {
     "name": "刘亚猛",
@@ -30,8 +30,8 @@
   "avatar": "avatars/team.png",
   "categoryId": "15-Education",
   "defaultInitPrompt": {
-    "zh": "我想写一篇用大模型自动修复单元测试的论文，投 ICSE，帮我做选题定位",
-    "en": "I want to write an ICSE paper on repairing unit tests with LLMs; help me position it"
+    "zh": "帮我为「大模型自动修复单元测试」设计研究问题、假设和通过判据",
+    "en": "Design research questions, hypotheses and pass criteria for a paper on repairing unit tests with large language models"
   },
   "tags": [
     {
@@ -49,16 +49,16 @@
   ],
   "quickPrompts": [
     {
-      "en": "I want to write an ICSE paper on repairing unit tests with LLMs; help me position it",
-      "zh": "我想写一篇用大模型自动修复单元测试的论文，投 ICSE，帮我做选题定位"
-    },
-    {
-      "en": "Design research questions, hypotheses and pass criteria for LLM-based unit-test repair",
+      "en": "Design research questions, hypotheses and pass criteria for a paper on repairing unit tests with large language models",
       "zh": "帮我为「大模型自动修复单元测试」设计研究问题、假设和通过判据"
     },
     {
-      "en": "A reviewer says my baseline comparison is unfair; help me plan the response and the extra experiments",
+      "en": "A reviewer says my baseline comparison is unfair — help me plan the response and the extra experiments",
       "zh": "审稿人说我的基线对比不公平，帮我准备回复思路和要补的实验"
+    },
+    {
+      "en": "Check whether this claim is too strong: our method significantly outperforms all existing approaches",
+      "zh": "帮我检查这句声称是否过强：我们的方法显著优于所有现有方法"
     }
   ]
 }
