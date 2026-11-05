@@ -1,0 +1,60 @@
+{
+  "_doc": "Build inputs for scripts/build_workbuddy_team.py. See workbuddy/astra-studio-team/team.json for the field meanings. A plugin entry with `skills` bundles only those skills.",
+  "plugins": [
+    { "plugin": "studio-core", "skills": ["init", "create-expert", "status"] },
+    "studio-insight",
+    { "plugin": "studio-planner", "skills": ["event-storm", "domain-model"] },
+    "studio-docs"
+  ],
+  "personas_from": ["studio-insight/agents", "studio-docs/agents"],
+  "members": [
+    {
+      "id": "docs-studio-team-lead",
+      "role": "lead",
+      "name": { "en": "Dora", "zh": "Dora" },
+      "profession": { "en": "Document Lead & Orchestrator", "zh": "文书主理人" }
+    },
+    {
+      "id": "business-analyst",
+      "role": "member",
+      "name": { "en": "Bea", "zh": "Bea" },
+      "profession": { "en": "Business Analyst", "zh": "业务分析师" },
+      "skills": ["persona-insight", "journey-map", "process-flow"]
+    },
+    {
+      "id": "architect",
+      "role": "member",
+      "source": "studio-insight/agents/architect.md",
+      "name": { "en": "Archer", "zh": "Archer" },
+      "profession": { "en": "Solution Architect", "zh": "方案架构师" },
+      "skills": ["domain-canvas", "behavior-matrix"]
+    },
+    {
+      "id": "section-writer",
+      "role": "member",
+      "name": { "en": "Wren", "zh": "Wren" },
+      "profession": { "en": "Section Writer", "zh": "撰稿人" },
+      "skills": ["write-section"]
+    },
+    {
+      "id": "domain-expert",
+      "role": "member",
+      "name": { "en": "Dana", "zh": "Dana" },
+      "profession": { "en": "Industry Expert", "zh": "行业专家" }
+    },
+    {
+      "id": "copy-editor",
+      "role": "member",
+      "name": { "en": "Edie", "zh": "Edie" },
+      "profession": { "en": "Copy Editor", "zh": "审校编辑" },
+      "skills": ["assemble-document"]
+    },
+    {
+      "id": "typesetter",
+      "role": "member",
+      "name": { "en": "Tess", "zh": "Tess" },
+      "profession": { "en": "Typesetter", "zh": "排版师" },
+      "skills": ["export-document"]
+    }
+  ]
+}

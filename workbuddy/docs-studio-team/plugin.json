@@ -1,0 +1,35 @@
+{
+  "name": "docs-studio-team",
+  "version": "0.1.0",
+  "description": "A seven-role document studio that turns tender files and business material into bid documents, proposals and feasibility studies: requirement analysis, chapter planning, section writing, compliance review and DOCX/PDF export",
+  "author": {
+    "name": "刘亚猛",
+    "email": "ameng2001.liu@gmail.com"
+  },
+  "homepage": "https://github.com/Ameng2001/astra-studio-plugins",
+  "license": "Apache-2.0",
+  "keywords": ["bid-document", "proposal", "feasibility-study", "document-generation"],
+  "expertType": "team",
+  "displayName": { "en": "Astra Docs", "zh": "Astra 文书工坊" },
+  "profession": { "en": "Bid & Proposal Writing Studio", "zh": "标书与方案撰写团队" },
+  "displayDescription": {
+    "en": "Seven roles turn tender files and business material into bid documents, proposals and feasibility studies — requirement analysis, chapter-by-chapter writing, compliance review and export",
+    "zh": "七位专家从招标文件和业务材料出发，梳理需求、分章撰写、审校合规，产出标书、建设方案和可研报告"
+  },
+  "avatar": "avatars/team.png",
+  "categoryId": "06-ContentCreative",
+  "defaultInitPrompt": {
+    "zh": "帮我写一份投标文件，招标文件在这里：",
+    "en": "Help me write a bid document; the tender file is here:"
+  },
+  "tags": [
+    { "en": "Bid Writing", "zh": "标书撰写" },
+    { "en": "Proposals", "zh": "方案编制" },
+    { "en": "Compliance Review", "zh": "合规审校" }
+  ],
+  "quickPrompts": [
+    { "en": "Help me write a bid document; the tender file is here:", "zh": "帮我写一份投标文件，招标文件在这里：" },
+    { "en": "Write a construction plan for my project", "zh": "给XX项目写一份建设方案" },
+    { "en": "Check my draft against the template and export it to Word", "zh": "按模板审校我的初稿并导出 Word" }
+  ]
+}

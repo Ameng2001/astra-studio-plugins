@@ -34,7 +34,7 @@
       "name": "studio-docs",
       "source": "./studio-docs",
       "description": "Document delivery suite — blueprints, writing experts, parallel chapter generation, multi-format export (MD/DOCX/PDF)",
-      "version": "0.1.0"
+      "version": "0.1.1"
     },
     {
       "name": "studio-platform",

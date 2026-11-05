@@ -1,0 +1,55 @@
+{
+  "_doc": "Build inputs for scripts/build_workbuddy_team.py. See workbuddy/astra-studio-team/team.json for the field meanings. studio-core is left out on purpose: its runtime templates collide with studio-paper's, and the lead creates the small studio/ skeleton that plan-document checks for.",
+  "plugins": ["studio-paper", "studio-docs"],
+  "personas_from": ["studio-paper/agents", "studio-docs/agents"],
+  "members": [
+    {
+      "id": "paper-studio-team-lead",
+      "role": "lead",
+      "name": { "en": "Piper", "zh": "Piper" },
+      "profession": { "en": "Paper Lead & Orchestrator", "zh": "论文主理人" }
+    },
+    {
+      "id": "research-advisor",
+      "role": "member",
+      "source": "studio-paper/agents/research-advisor.md",
+      "name": { "en": "Ada", "zh": "Ada" },
+      "profession": { "en": "Advisor Pre-screener", "zh": "导师预审员" }
+    },
+    {
+      "id": "experiment-analyst",
+      "role": "member",
+      "name": { "en": "Lex", "zh": "Lex" },
+      "profession": { "en": "Experiment Analyst", "zh": "实验分析员" },
+      "skills": ["record-run", "freeze-results"]
+    },
+    {
+      "id": "paper-writer",
+      "role": "member",
+      "name": { "en": "Wren", "zh": "Wren" },
+      "profession": { "en": "Paper Writer", "zh": "论文撰稿人" },
+      "skills": ["write-section"]
+    },
+    {
+      "id": "reviewer-nearest-author",
+      "role": "member",
+      "source": "studio-paper/agents/reviewer-nearest-author.md",
+      "name": { "en": "Nora", "zh": "Nora" },
+      "profession": { "en": "Reviewer: Nearest-work Author", "zh": "近邻工作审稿人" }
+    },
+    {
+      "id": "reviewer-methodology",
+      "role": "member",
+      "source": "studio-paper/agents/reviewer-methodology.md",
+      "name": { "en": "Milo", "zh": "Milo" },
+      "profession": { "en": "Reviewer: Methodology", "zh": "方法论审稿人" }
+    },
+    {
+      "id": "reviewer-adjacent",
+      "role": "member",
+      "source": "studio-paper/agents/reviewer-adjacent.md",
+      "name": { "en": "Ari", "zh": "Ari" },
+      "profession": { "en": "Reviewer: Adjacent Field", "zh": "相邻领域审稿人" }
+    }
+  ]
+}

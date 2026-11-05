@@ -57,7 +57,7 @@ Extract:
 ### 1b. Read the Blueprint
 
 Resolve the blueprint path from the doc plan's `blueprint` field:
-- Built-in blueprints: `${CLAUDE_SKILL_DIR}/../../blueprints/{type}.yaml`
+- Built-in blueprints: `${CLAUDE_SKILL_DIR}/../../templates/blueprints/{type}.yaml`
 - Custom blueprints: `studio/blueprints/{type}.yaml`
 
 Extract from the blueprint:

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Assemble the WorkBuddy open-platform expert-team package for Astra Studio.
+"""Assemble WorkBuddy open-platform expert-team packages from the plugins here.
 
-The team is a repackaging, not a fork: skills, references, templates and
+A team is a repackaging, not a fork: skills, references, templates and
 scripts are copied from the plugin directories at build time, and only what
-is specific to the expert-team format lives in workbuddy/astra-studio-team/.
+is specific to the expert-team format lives in workbuddy/<team>/.
 
 Usage:
-    python3 scripts/build_workbuddy_team.py            # build dir + zip under dist/workbuddy/
-    python3 scripts/build_workbuddy_team.py --check    # validate only, write nothing
-    python3 scripts/build_workbuddy_team.py --flat     # zip without the wrapping folder
+    python3 scripts/build_workbuddy_team.py                  # build every team under workbuddy/
+    python3 scripts/build_workbuddy_team.py docs-studio-team # build the named team(s) only
+    python3 scripts/build_workbuddy_team.py --check          # validate only, write nothing
+    python3 scripts/build_workbuddy_team.py --flat           # zip without the wrapping folder
 
 Where the official docs and the official template (trading-team.zip) disagree,
 the package satisfies both when it can: the lead is declared in settings.json
@@ -28,7 +29,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OVERLAY = ROOT / "workbuddy" / "astra-studio-team"
+TEAMS = ROOT / "workbuddy"
+OVERLAY = TEAMS  # set per team in main()
 DIST = ROOT / "dist" / "workbuddy"
 
 # Plugin-root directories that skills reach via ${CLAUDE_SKILL_DIR}/../../<dir>/.
@@ -37,6 +39,7 @@ SUPPORT_DIRS = ("templates", "references", "scripts")
 # the registered team roster, so personas move to their own directory.
 PERSONA_REF = "${CLAUDE_SKILL_DIR}/../../agents/"
 PERSONA_REF_TEAM = "${CLAUDE_SKILL_DIR}/../../personas/"
+AGENT_ROOT_REF = "${CODEBUDDY_PLUGIN_ROOT}/"
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
 
 CATEGORY_IDS = {
@@ -82,6 +85,11 @@ def member_frontmatter(member: dict, description: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def persona_dirs(team: dict) -> list[str]:
+    value = team.get("personas_from") or []
+    return [value] if isinstance(value, str) else list(value)
+
+
 def png_size(path: Path) -> tuple[int, int] | None:
     head = path.read_bytes()[:24]
     if head[:8] != b"\x89PNG\r\n\x1a\n":
@@ -94,9 +102,14 @@ def collect(team: dict) -> tuple[dict[str, Path], dict[str, Path], list[str]]:
     errors: list[str] = []
     skills: dict[str, Path] = {}
     support: dict[str, Path] = {}
-    for plugin in team["plugins"]:
+    for entry in team["plugins"]:
+        # A bare name bundles every skill; {"plugin", "skills"} bundles the listed ones.
+        plugin, only = (entry, None) if isinstance(entry, str) else (entry["plugin"], entry["skills"])
+        found = {d.name for d in (ROOT / plugin / "skills").iterdir() if (d / "SKILL.md").exists()}
+        for missing in sorted(set(only or []) - found):
+            errors.append(f"{plugin} has no skill '{missing}'")
         for skill_dir in sorted((ROOT / plugin / "skills").iterdir()):
-            if not (skill_dir / "SKILL.md").exists():
+            if skill_dir.name not in found or (only is not None and skill_dir.name not in only):
                 continue
             if skill_dir.name in skills:
                 errors.append(f"skill '{skill_dir.name}' exists in two bundled plugins")
@@ -106,7 +119,7 @@ def collect(team: dict) -> tuple[dict[str, Path], dict[str, Path], list[str]]:
             if not base.is_dir():
                 continue
             for f in sorted(p for p in base.rglob("*") if p.is_file()):
-                if "__pycache__" in f.parts or f.suffix == ".pyc":
+                if "__pycache__" in f.parts or f.suffix == ".pyc" or f.name == ".DS_Store":
                     continue
                 rel = f"{d}/{f.relative_to(base).as_posix()}"
                 if rel in support:
@@ -254,15 +267,23 @@ def write_package(out: Path, manifest: dict, team: dict,
         dst = out / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
-    shutil.copytree(ROOT / team["personas_from"], out / "personas", ignore=IGNORE)
+    for src_dir in persona_dirs(team):
+        shutil.copytree(ROOT / src_dir, out / "personas", ignore=IGNORE, dirs_exist_ok=True)
+    for md in sorted((out / "personas").glob("*.md")) if (out / "personas").is_dir() else []:
+        text = md.read_text(encoding="utf-8")
+        md.write_text(text.replace("${CLAUDE_SKILL_DIR}/../../", AGENT_ROOT_REF), encoding="utf-8")
 
     (out / "agents").mkdir()
     for m in team["members"]:
         dst = out / "agents" / f"{m['id']}.md"
         if m.get("source"):
             front, body = split_frontmatter((ROOT / m["source"]).read_text(encoding="utf-8"))
+            # A plugin agent reaches plugin files through a skill-relative path;
+            # a team agent is not a skill, so it goes through the package root.
+            body = body.replace(PERSONA_REF, AGENT_ROOT_REF + "personas/").replace(
+                "${CLAUDE_SKILL_DIR}/../../", AGENT_ROOT_REF)
             dst.write_text(
-                member_frontmatter(m, frontmatter_value(front, "description")) + body,
+                member_frontmatter(m, m.get("description") or frontmatter_value(front, "description")) + body,
                 encoding="utf-8")
         else:
             shutil.copy2(OVERLAY / "agents" / dst.name, dst)
@@ -284,33 +305,49 @@ def zip_package(out: Path, zip_path: Path, flat: bool) -> None:
             z.write(f, prefix + f.relative_to(out).as_posix())
 
 
-def main() -> int:
-    check_only = "--check" in sys.argv[1:]
+def build_team(overlay: Path, check_only: bool, flat: bool) -> bool:
+    global OVERLAY
+    OVERLAY = overlay
     manifest = json.loads((OVERLAY / "plugin.json").read_text(encoding="utf-8"))
     team = json.loads((OVERLAY / "team.json").read_text(encoding="utf-8"))
 
     skills, support, errors = collect(team)
     rule_errors, warnings = validate(manifest, team, skills)
     errors += rule_errors
+    if manifest.get("name") != overlay.name:
+        errors.append(f"plugin.json name must equal the directory name {overlay.name!r}")
     for w in warnings:
-        print(f"WARN  {w}", file=sys.stderr)
+        print(f"WARN  {overlay.name}: {w}", file=sys.stderr)
     for e in errors:
-        print(f"ERROR {e}", file=sys.stderr)
+        print(f"ERROR {overlay.name}: {e}", file=sys.stderr)
     if errors:
-        return 1
+        return False
     if check_only:
-        print(f"ok: {len(team['members'])} agents, {len(skills)} skills")
-        return 0
+        print(f"ok: {overlay.name} — {len(team['members'])} agents, {len(skills)} skills")
+        return True
 
     full = build_manifest(manifest, team, skills)
     out = DIST / manifest["name"]
     write_package(out, full, team, skills, support)
     zip_path = DIST / f"{manifest['name']}-{manifest['version']}.zip"
-    zip_package(out, zip_path, flat="--flat" in sys.argv[1:])
+    zip_package(out, zip_path, flat=flat)
     size_kb = zip_path.stat().st_size // 1024
     print(f"built {out.relative_to(ROOT)}/ — {len(team['members'])} agents, {len(skills)} skills")
     print(f"wrote {zip_path.relative_to(ROOT)} ({size_kb} KB)")
-    return 0
+    return True
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    names = [a for a in args if not a.startswith("--")]
+    overlays = ([TEAMS / n for n in names] if names
+                else sorted(p.parent for p in TEAMS.glob("*/team.json")))
+    missing = [o.name for o in overlays if not (o / "team.json").exists()]
+    if missing:
+        print(f"ERROR no such team under workbuddy/: {', '.join(missing)}", file=sys.stderr)
+        return 1
+    results = [build_team(o, "--check" in args, "--flat" in args) for o in overlays]
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":

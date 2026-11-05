@@ -301,11 +301,19 @@ claude --plugin-dir ./studio-core --plugin-dir ./studio-insight --plugin-dir ./s
 # regenerate the CodeBuddy / WorkBuddy marketplace mirror (--check for CI)
 python3 scripts/sync_codebuddy_marketplace.py
 
-# Build the WorkBuddy open-platform expert-team package (zip under dist/workbuddy/)
-python3 scripts/build_workbuddy_team.py
+# Build the WorkBuddy open-platform expert-team packages (zips under dist/workbuddy/)
+python3 scripts/build_workbuddy_team.py                    # every team; name one to build only it
 ```
 
-The expert team (`workbuddy/astra-studio-team/`) is a repackaging, not a fork: it holds only the team manifest, the lead and team-only agents, and avatars. Skills, references, templates and scripts are copied from `studio-core`, `studio-insight`, `studio-planner` and `studio-quality` at build time.
+Each expert team under `workbuddy/` is a repackaging, not a fork: it holds only the team manifest, the lead and team-only agents, and avatars. Skills, references, templates and scripts are copied from the plugins at build time.
+
+| Team | For | Bundles |
+|------|-----|---------|
+| `astra-studio-team` — Astra 插件工坊 | planning and building plugins | `studio-core`, `studio-insight`, `studio-planner`, `studio-quality` |
+| `docs-studio-team` — Astra 文书工坊 | bid documents, proposals, feasibility studies | `studio-docs`, `studio-insight`, parts of `studio-core` and `studio-planner` |
+| `paper-studio-team` — Astra 论文工坊 | empirical CS conference papers | `studio-paper`, `studio-docs` |
+
+Avatars are drawn by `scripts/gen_team_avatars.py` (needs Pillow); add a cast there when adding a team.
 
 `.claude-plugin/` is the single source of truth. CodeBuddy and WorkBuddy read each plugin's `.claude-plugin/plugin.json` directly; only the marketplace manifest is mirrored to `.codebuddy-plugin/marketplace.json`. CodeBuddy caches plugins by version, so bump `version` in `plugin.json` on every release or existing users will not see the change.
 

@@ -6,7 +6,8 @@ images are original work with no third-party source or license to track.
 Each character is seeded, so re-running reproduces the same picture.
 
 Usage:
-    python3 scripts/gen_team_avatars.py [out_dir]     # default: workbuddy/astra-studio-team/avatars
+    python3 scripts/gen_team_avatars.py               # every team in CASTS
+    python3 scripts/gen_team_avatars.py docs-studio-team
 
 Needs Pillow.
 """
@@ -19,7 +20,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUT = ROOT / "workbuddy" / "astra-studio-team" / "avatars"
+TEAMS = ROOT / "workbuddy"
 S = 1024          # working canvas; downsampled to 512
 CX, CY = 512, 470  # head centre
 
@@ -270,15 +271,38 @@ def black_cat(d, rng):  # quality reviewer: unimpressed until it passes
                     CY + 60 + k * 44), fill=(150, 146, 158), width=3)
 
 
-CHARACTERS = [
-    ("astra-studio-team-lead", collie, (232, 238, 246)),
-    ("product-manager", hamster, (253, 240, 222)),
-    ("architect", schnauzer, (234, 238, 240)),
-    ("ux-researcher", siamese, (228, 242, 244)),
-    ("domain-expert", orangutan, (250, 238, 226)),
-    ("skill-builder", puppy, (244, 240, 230)),
-    ("quality-reviewer", black_cat, (238, 236, 244)),
-]
+# Team -> cast, in roster order. The first four tiles make up team.png.
+# Species repeat across teams as a house style; each member is seeded by name,
+# so the same species comes out with its own fur.
+CASTS = {
+    "astra-studio-team": [
+        ("astra-studio-team-lead", collie, (232, 238, 246)),
+        ("product-manager", hamster, (253, 240, 222)),
+        ("architect", schnauzer, (234, 238, 240)),
+        ("ux-researcher", siamese, (228, 242, 244)),
+        ("domain-expert", orangutan, (250, 238, 226)),
+        ("skill-builder", puppy, (244, 240, 230)),
+        ("quality-reviewer", black_cat, (238, 236, 244)),
+    ],
+    "docs-studio-team": [
+        ("docs-studio-team-lead", siamese, (236, 244, 232)),
+        ("business-analyst", hamster, (246, 240, 224)),
+        ("architect", schnauzer, (230, 240, 236)),
+        ("section-writer", puppy, (240, 244, 228)),
+        ("domain-expert", orangutan, (244, 240, 226)),
+        ("copy-editor", black_cat, (232, 240, 232)),
+        ("typesetter", collie, (228, 240, 238)),
+    ],
+    "paper-studio-team": [
+        ("paper-studio-team-lead", orangutan, (240, 234, 248)),
+        ("research-advisor", schnauzer, (234, 234, 246)),
+        ("experiment-analyst", collie, (230, 236, 250)),
+        ("paper-writer", puppy, (244, 238, 246)),
+        ("reviewer-nearest-author", black_cat, (240, 232, 244)),
+        ("reviewer-methodology", siamese, (232, 238, 248)),
+        ("reviewer-adjacent", hamster, (248, 238, 240)),
+    ],
+}
 
 
 def render(name, painter, background):
@@ -289,21 +313,30 @@ def render(name, painter, background):
     return img.resize((512, 512), Image.LANCZOS)
 
 
-def main() -> int:
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_OUT
+def draw_team(team: str) -> None:
+    out = TEAMS / team / "avatars"
     out.mkdir(parents=True, exist_ok=True)
     tiles = []
-    for name, painter, background in CHARACTERS:
+    for name, painter, background in CASTS[team]:
         img = render(name, painter, background)
         # 256-colour palette: a third of the size, no visible loss on fur texture
         img.quantize(256).save(out / f"{name}.png", optimize=True)
         tiles.append(img)
-        print(f"wrote {name}.png")
-    team = Image.new("RGB", (512, 512), "white")
+    sheet = Image.new("RGB", (512, 512), "white")
     for i, tile in enumerate(tiles[:4]):
-        team.paste(tile.resize((256, 256), Image.LANCZOS), ((i % 2) * 256, (i // 2) * 256))
-    team.quantize(256).save(out / "team.png", optimize=True)
-    print("wrote team.png")
+        sheet.paste(tile.resize((256, 256), Image.LANCZOS), ((i % 2) * 256, (i // 2) * 256))
+    sheet.quantize(256).save(out / "team.png", optimize=True)
+    print(f"wrote {len(tiles)} avatars + team.png to {out.relative_to(ROOT)}/")
+
+
+def main() -> int:
+    teams = sys.argv[1:] or list(CASTS)
+    unknown = [t for t in teams if t not in CASTS]
+    if unknown:
+        print(f"no cast defined for: {', '.join(unknown)}", file=sys.stderr)
+        return 1
+    for team in teams:
+        draw_team(team)
     return 0
 
 

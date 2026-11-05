@@ -1,0 +1,35 @@
+{
+  "name": "paper-studio-team",
+  "version": "0.1.0",
+  "description": "A seven-role research studio for empirical computer-science papers: positioning against the nearest work, frozen pass/fail criteria, an append-only run ledger, result tables built only from formal runs, simulated peer review, submission checks and rebuttal",
+  "author": {
+    "name": "刘亚猛",
+    "email": "ameng2001.liu@gmail.com"
+  },
+  "homepage": "https://github.com/Ameng2001/astra-studio-plugins",
+  "license": "Apache-2.0",
+  "keywords": ["academic-paper", "experiment-ledger", "peer-review", "rebuttal"],
+  "expertType": "team",
+  "displayName": { "en": "Astra Paper", "zh": "Astra 论文工坊" },
+  "profession": { "en": "Empirical Paper Research Studio", "zh": "实证论文研究与写作团队" },
+  "displayDescription": {
+    "en": "Seven roles take an empirical CS paper from positioning and frozen criteria through an experiment ledger, evidence-only writing, simulated peer review, submission checks and rebuttal",
+    "zh": "七位专家陪你把实证论文从选题定位、判据冻结、实验台账做到模拟评审、投稿检查和审稿回复，数字只出自台账"
+  },
+  "avatar": "avatars/team.png",
+  "categoryId": "15-Education",
+  "defaultInitPrompt": {
+    "zh": "我想写一篇论文，先帮我做选题定位：",
+    "en": "I want to write a paper; help me position it first:"
+  },
+  "tags": [
+    { "en": "Paper Writing", "zh": "论文写作" },
+    { "en": "Experiment Ledger", "zh": "实验台账" },
+    { "en": "Simulated Review", "zh": "模拟评审" }
+  ],
+  "quickPrompts": [
+    { "en": "I want to write a paper; help me position it first:", "zh": "我想写一篇论文，先帮我做选题定位：" },
+    { "en": "Run a simulated peer review on my draft", "zh": "对我的初稿做一轮模拟评审" },
+    { "en": "The reviews are in; help me draft the rebuttal", "zh": "审稿意见回来了，帮我逐条准备回复" }
+  ]
+}

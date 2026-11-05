@@ -1,6 +1,6 @@
 {
   "name": "studio-docs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Document delivery suite — generate formal project documents (proposals, feasibility studies, designs, tenders, bids, acceptance packages) from studio planning artifacts. Supports custom writing experts, parallel chapter generation with checkpoint recovery, and multi-format export (MD/DOCX/PDF).",
   "author": {
     "name": "VanLengs",

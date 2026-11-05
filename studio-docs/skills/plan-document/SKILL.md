@@ -140,6 +140,8 @@ For each chapter in the blueprint:
    - `process-flow` → `studio/changes/{domain}/process-flow/*.md`
    - `behavior-matrix` → `studio/changes/{domain}/behavior-matrix.md`
 
+   The workspace has used more than one naming over time. Treat these as the same artifact: `domain-model.md` / `domain-map.md`; `persona-insight/` / `personas/`; `journey-map/` / `journeys/`; `process-flow/` / `processes/`. Source material the user supplied (a tender file, a requirements brief, meeting notes) under `studio/changes/{domain}/sources/` can be mapped to any chapter it informs.
+
 3. **Plugin-specific chapters** (e.g., "建设内容", "系统设计"):
    - Scan all plugin directories: `studio/changes/{domain}/{plugin}/`
    - Collect `brief.md` and `skill-map.md` from each plugin
