@@ -1,6 +1,6 @@
 {
   "name": "docs-studio-team",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A seven-role document studio that turns tender files and business material into bid documents, proposals and feasibility studies: requirement analysis, chapter planning, section writing, compliance review and DOCX/PDF export",
   "author": {
     "name": "刘亚猛",
@@ -8,10 +8,21 @@
   },
   "homepage": "https://github.com/Ameng2001/astra-studio-plugins",
   "license": "Apache-2.0",
-  "keywords": ["bid-document", "proposal", "feasibility-study", "document-generation"],
+  "keywords": [
+    "bid-document",
+    "proposal",
+    "feasibility-study",
+    "document-generation"
+  ],
   "expertType": "team",
-  "displayName": { "en": "Astra Docs", "zh": "Astra 文书工坊" },
-  "profession": { "en": "Bid & Proposal Writing Studio", "zh": "标书与方案撰写团队" },
+  "displayName": {
+    "en": "Astra Docs",
+    "zh": "Astra 文书工坊"
+  },
+  "profession": {
+    "en": "Bid & Proposal Writing Studio",
+    "zh": "标书与方案撰写团队"
+  },
   "displayDescription": {
     "en": "Seven roles turn tender files and business material into bid documents, proposals and feasibility studies — requirement analysis, chapter-by-chapter writing, compliance review and export",
     "zh": "七位专家从招标文件和业务材料出发，梳理需求、分章撰写、审校合规，产出标书、建设方案和可研报告"
@@ -19,17 +30,35 @@
   "avatar": "avatars/team.png",
   "categoryId": "06-ContentCreative",
   "defaultInitPrompt": {
-    "zh": "帮我写一份投标文件，招标文件在这里：",
-    "en": "Help me write a bid document; the tender file is here:"
+    "zh": "为「智慧校园安防升级项目」写建设方案的章节结构和项目概述一章",
+    "en": "Write the chapter outline and the project overview chapter of a construction plan for a smart-campus security upgrade"
   },
   "tags": [
-    { "en": "Bid Writing", "zh": "标书撰写" },
-    { "en": "Proposals", "zh": "方案编制" },
-    { "en": "Compliance Review", "zh": "合规审校" }
+    {
+      "en": "Bid Writing",
+      "zh": "标书撰写"
+    },
+    {
+      "en": "Proposals",
+      "zh": "方案编制"
+    },
+    {
+      "en": "Compliance Review",
+      "zh": "合规审校"
+    }
   ],
   "quickPrompts": [
-    { "en": "Help me write a bid document; the tender file is here:", "zh": "帮我写一份投标文件，招标文件在这里：" },
-    { "en": "Write a construction plan for my project", "zh": "给XX项目写一份建设方案" },
-    { "en": "Check my draft against the template and export it to Word", "zh": "按模板审校我的初稿并导出 Word" }
+    {
+      "en": "Write the chapter outline and the project overview chapter of a construction plan for a smart-campus security upgrade",
+      "zh": "为「智慧校园安防升级项目」写建设方案的章节结构和项目概述一章"
+    },
+    {
+      "en": "Help me write a feasibility study for a community elder-care platform, starting with the outline and the requirement analysis",
+      "zh": "帮我写社区养老服务平台的可行性研究报告，先出章节结构和需求分析"
+    },
+    {
+      "en": "How should the technical part of a bid document be organised? Give me the outline and the key points of each chapter",
+      "zh": "投标文件的技术方案部分怎么组织？给我章节结构和每章写作要点"
+    }
   ]
 }
