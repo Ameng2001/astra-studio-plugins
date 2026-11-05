@@ -800,7 +800,8 @@ def _archive_previous(out: Path, date: str, version: str) -> None:
 def emit_pricing_params(wb, pack: StandardPack, fpset: dict,
                         fp_systems: list[dict], *, name: str,
                         subtitle_tail: str,
-                        deal_counting: str | None = None
+                        deal_counting: str | None = None,
+                        single_value_factors: bool = False
                         ) -> tuple[Any, dict[str, int]]:
     """计价参数 —— 既是举证（每个系数的页码/条款/区间），也是试算的参数面板。
 
@@ -812,6 +813,12 @@ def emit_pricing_params(wb, pack: StandardPack, fpset: dict,
       · 无「开发类别系数」—— 人月费率固定 1.7 万，不按开发类别调。
 
     「本标准没有这个维度」也要印在表上，否则读的人会以为是漏印。
+
+    `single_value_factors=True` 时软件类别因子按**单值**呈现（广东表2）：
+    该列改成灰格、区间列写「标准单值」。柳州给的是区间（业务处理 [0.8,1.0]、
+    人工智能 [1.0,1.5]），取值有空间，所以是黄格可试算；广东给单值，
+    **偏离缺省不是「取上界」，是不按标准取值，无条款可引**。
+    同一张黄格在两地含义相反，不能靠读表的人自己分辨。
 
     返回 (sheet, {参数名: 行号})，供 04 用绝对地址 / VLOOKUP 区域引用。
     """
@@ -919,9 +926,16 @@ def emit_pricing_params(wb, pack: StandardPack, fpset: dict,
         rows[f"app:{k}"] = s.row(
             {"参数": f"　软件类别 · {k}", "取值": v,
              "单位/说明": ("【本项目用到】" if k in used else "") + note,
-             "取值区间": f"[{lo}, {hi}]"},
-            clause=cite(at), cell_roles={"取值": "input"})
+             "取值区间": ("标准单值，无取值空间" if single_value_factors
+                          else f"[{lo}, {hi}]")},
+            clause=cite(at),
+            cell_roles={"取值": "locked" if single_value_factors else "input"})
     rows["app_last"] = s._next - 1
+    if single_value_factors:
+        s.note("　⚠ 本标准的软件类别因子是**单值**，不是区间 —— 上表为灰格。"
+               "偏离缺省不是「取上界」，是不按标准取值，无条款可引。"
+               "要试的是「这个子系统归哪一类」（第一层的条目属性），"
+               "不是「同一类取几」。")
     # 列位不猜：04 用它拼绝对地址与 VLOOKUP 区域
     rows["_kcol"], rows["_vcol"] = _col(s, "参数"), _col(s, "取值")
     for k, (v, basis) in sorted(fpset["app_type"].items()):
@@ -1194,7 +1208,8 @@ def emit_fp_whatif(wb, pack: StandardPack, fpset: dict,
                    engine_total: float, *, param_sheet: str,
                    root: Path | None = None, sw: dict | None = None,
                    effort_only: set[str] | None = None,
-                   ef: dict | None = None) -> None:
+                   ef: dict | None = None,
+                   single_value_factors: bool = False) -> None:
     """二层试算 —— 活公式，引同册的试算参数表。
 
     ## 为什么这里可以用活公式
@@ -1405,10 +1420,18 @@ def emit_fp_whatif(wb, pack: StandardPack, fpset: dict,
     s.note("　【改了怎么落实】两类格子归属不同的层，落实路径不同：")
     s.note(f"　　{param_sheet} 的灰格（人月折算系数、基准人月费率、复用系数）= **第二层**，"
            "标准原文，**不该改** —— 试算只为看敏感度。若确认抄错了，"
-           "改 standard-packs/liuzhou-2020/pack.yaml 并同步 citation。")
-    s.note(f"　　{param_sheet} 的黄格（生产率浮动、软件类别因子）= **本商机决策**，"
-           "落实要改 deals/<id>/deal.yaml 的 fp_method_settings，"
-           "且超过 1.0 的必须同时写 basis（表3 注1）。")
+           f"改 standard-packs/{pack.pack_id}/pack.yaml 并同步 citation。")
+    if single_value_factors:
+        s.note(f"　　{param_sheet} 的黄格只有**生产率浮动**一项 —— 落实要改 "
+               "deals/<id>/deal.yaml 的 fp_method_settings.productivity_ratio，"
+               "标准允许上下浮动 20%，浮动须写 productivity_basis。")
+        s.note("　　⚠ **软件类别因子在本标准下不可试算**：表2 给的是单值，"
+               "deal.yaml 里写一个偏离值引擎会当场硬失败。本表 F 列的因子"
+               "随 B 列的类别变，变的是「归哪一类」，不是「这一类取几」。")
+    else:
+        s.note(f"　　{param_sheet} 的黄格（生产率浮动、软件类别因子）= **本商机决策**，"
+               "落实要改 deals/<id>/deal.yaml 的 fp_method_settings，"
+               "且超过 1.0 的必须同时写 basis（表3 注1）。")
     s.note("　　本表 B 列的软件类别 = **第一层**，BOM 里子系统的属性。"
            "若认为某个子系统分类不对，落实要改 bom/taxonomy.yaml，不是改这张表。")
     s.finish()
@@ -2086,6 +2109,9 @@ def read_device_config(root: Path, deal_dir: Path) -> dict[str, Any]:
                 "name": m["name"], "model": ref, "code": m["code"],
                 "spec": m.get("spec", ""), "自研": m.get("self_made", ""),
                 "ref_count": ref_count,
+                # 价格依据（pricing.yaml 的 price_basis）：估算值 / 询价值 /
+                # 成交价的区别，下游质检册要按它分诊，故随行带走。
+                "price_basis": m.get("price_basis", ""),
                 "unit": m["unit"], "qty": qty, "unit_price": price,
                 "price_from": ("本商机"
                                if _deal_prices.get(it["material"]) not in (None, "")
