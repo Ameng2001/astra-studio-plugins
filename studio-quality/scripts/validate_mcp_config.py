@@ -17,6 +17,19 @@ import sys
 from pathlib import Path
 
 
+
+MANIFEST_DIRS = (".codebuddy-plugin", ".workbuddy-plugin", ".claude-plugin")
+
+
+def find_manifest(root: Path) -> Path:
+    """Locate plugin.json. CodeBuddy / WorkBuddy prefer their own directory
+    and fall back to .claude-plugin/, so check in that order."""
+    for d in MANIFEST_DIRS:
+        path = root / d / "plugin.json"
+        if path.exists():
+            return path
+    return root / ".claude-plugin" / "plugin.json"
+
 def validate_mcp_config(plugin_dir: str) -> dict:
     """Validate .mcp.json in the given plugin directory."""
     root = Path(plugin_dir).resolve()
@@ -79,7 +92,7 @@ def validate_mcp_config(plugin_dir: str) -> dict:
         )
 
     # Check manifest references .mcp.json
-    manifest_path = root / ".claude-plugin" / "plugin.json"
+    manifest_path = find_manifest(root)
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text())

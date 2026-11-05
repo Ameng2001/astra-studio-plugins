@@ -28,6 +28,19 @@ RECOGNIZED_HOOK_EVENTS = {
 }
 
 
+
+MANIFEST_DIRS = (".codebuddy-plugin", ".workbuddy-plugin", ".claude-plugin")
+
+
+def find_manifest(root: Path) -> Path:
+    """Locate plugin.json. CodeBuddy / WorkBuddy prefer their own directory
+    and fall back to .claude-plugin/, so check in that order."""
+    for d in MANIFEST_DIRS:
+        path = root / d / "plugin.json"
+        if path.exists():
+            return path
+    return root / ".claude-plugin" / "plugin.json"
+
 def check_mcp(root: Path) -> dict:
     """Check .mcp.json validity."""
     results = {"passed": [], "failed": [], "warnings": []}
@@ -115,7 +128,7 @@ def check_plugin_dependencies(root: Path, manifest: dict) -> dict:
     for dep in deps:
         # Check if the dependency exists as a sibling directory (in a collection)
         sibling = root.parent / dep
-        if sibling.is_dir() and (sibling / ".claude-plugin" / "plugin.json").exists():
+        if sibling.is_dir() and find_manifest(sibling).exists():
             results["passed"].append(f"Dependency '{dep}' found as sibling plugin")
         else:
             results["warnings"].append(
@@ -132,7 +145,7 @@ def check_dependencies(plugin_dir: str) -> dict:
 
     # Load manifest
     manifest = {}
-    manifest_path = root / ".claude-plugin" / "plugin.json"
+    manifest_path = find_manifest(root)
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text())

@@ -5,7 +5,7 @@ Usage:
     python validate_plugin.py <plugin-dir>
 
 Checks:
-    - .claude-plugin/plugin.json exists and is valid JSON
+    - plugin.json exists (.claude-plugin/, or .codebuddy-plugin/ / .workbuddy-plugin/) and is valid JSON
     - Required fields: name, version, description
     - name matches directory name and kebab-case pattern
     - version follows semver
@@ -18,13 +18,26 @@ import sys
 from pathlib import Path
 
 
+
+MANIFEST_DIRS = (".codebuddy-plugin", ".workbuddy-plugin", ".claude-plugin")
+
+
+def find_manifest(root: Path) -> Path:
+    """Locate plugin.json. CodeBuddy / WorkBuddy prefer their own directory
+    and fall back to .claude-plugin/, so check in that order."""
+    for d in MANIFEST_DIRS:
+        path = root / d / "plugin.json"
+        if path.exists():
+            return path
+    return root / ".claude-plugin" / "plugin.json"
+
 def validate_plugin(plugin_dir: str) -> dict:
     """Validate plugin structure. Returns {passed: [...], failed: [...], warnings: [...]}."""
     root = Path(plugin_dir).resolve()
     results = {"passed": [], "failed": [], "warnings": []}
 
     # Check plugin.json exists
-    manifest_path = root / ".claude-plugin" / "plugin.json"
+    manifest_path = find_manifest(root)
     if not manifest_path.exists():
         # Also check for plugin.json.draft (studio workspace)
         draft_path = root / "plugin.json.draft"
@@ -35,7 +48,7 @@ def validate_plugin(plugin_dir: str) -> dict:
             )
         else:
             results["failed"].append(
-                ".claude-plugin/plugin.json not found (and no plugin.json.draft)"
+                "plugin.json not found in .claude-plugin/, .codebuddy-plugin/ or .workbuddy-plugin/ (and no plugin.json.draft)"
             )
             return results
 

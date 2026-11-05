@@ -42,6 +42,10 @@ claude plugin install studio-planner@astra-studio
 claude plugin install studio-quality@astra-studio
 claude plugin install studio-platform@astra-studio
 
+# On CodeBuddy Code / WorkBuddy, the same two steps are:
+#   codebuddy plugin marketplace add Ameng2001/astra-studio-plugins
+#   codebuddy plugin install studio-core@astra-studio
+
 # 3. Initialize studio in your project
 /studio-core:init
 
@@ -292,7 +296,13 @@ Promotion creates versioned milestones — design docs are **copied** (not moved
 ```bash
 # Test locally
 claude --plugin-dir ./studio-core --plugin-dir ./studio-insight --plugin-dir ./studio-planner --plugin-dir ./studio-quality --plugin-dir ./studio-docs --plugin-dir ./studio-platform
+
+# After editing .claude-plugin/marketplace.json or any plugin version,
+# regenerate the CodeBuddy / WorkBuddy marketplace mirror (--check for CI)
+python3 scripts/sync_codebuddy_marketplace.py
 ```
+
+`.claude-plugin/` is the single source of truth. CodeBuddy and WorkBuddy read each plugin's `.claude-plugin/plugin.json` directly; only the marketplace manifest is mirrored to `.codebuddy-plugin/marketplace.json`. CodeBuddy caches plugins by version, so bump `version` in `plugin.json` on every release or existing users will not see the change.
 
 ## License
 

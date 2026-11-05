@@ -85,6 +85,7 @@ The `--merge` flag preserves existing entries in `.mcp.json`. The script generat
 
 Use `${CLAUDE_PLUGIN_ROOT}` for plugin-relative paths.
 Use `${CLAUDE_PLUGIN_DATA}` for persistent data paths.
+Both names also resolve on CodeBuddy / WorkBuddy, which treat them as aliases of `${CODEBUDDY_PLUGIN_ROOT}` and `${CODEBUDDY_PLUGIN_DATA}` — keep the `CLAUDE_*` form so one file works on both runtimes.
 
 ## Step 5: Validate
 

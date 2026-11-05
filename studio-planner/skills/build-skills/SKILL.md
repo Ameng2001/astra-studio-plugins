@@ -76,6 +76,7 @@ For each in-scope skill:
 5. Invoke `skill-creator` as an internal build capability to:
    - flesh out new skeletons, or
    - revise existing skills in place for this iteration
+   If the runtime has no `skill-creator` skill (it ships with Claude Code; CodeBuddy / WorkBuddy and other compatible runtimes may not have it), do the same work directly: write the skill body from the skeleton and its `skill-map.md` section, following `${CLAUDE_SKILL_DIR}/../../references/skill-decomposition-guide.md`. Say in the completion message that drafts were written without `skill-creator`, so no evals were generated.
 6. If the build succeeds, set the skill status to `built`
 7. If the build fails, leave the skill status as `draft` or set it to `building-failed` if the workspace schema supports it
 

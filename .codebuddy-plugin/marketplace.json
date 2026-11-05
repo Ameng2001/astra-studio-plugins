@@ -1,0 +1,70 @@
+{
+  "name": "astra-studio",
+  "version": "0.2.1",
+  "owner": {
+    "name": "VanLengs",
+    "url": "https://github.com/VanLengs"
+  },
+  "plugins": [
+    {
+      "name": "studio-core",
+      "source": "./studio-core",
+      "description": "Studio workspace management — init, promote, status",
+      "version": "0.2.1"
+    },
+    {
+      "name": "studio-insight",
+      "source": "./studio-insight",
+      "description": "Business analysis toolkit — personas, journey maps, process flows, domain modeling",
+      "version": "0.2.1"
+    },
+    {
+      "name": "studio-planner",
+      "source": "./studio-planner",
+      "description": "Plugin planning pipeline — event storming, domain modeling, skill design, spec generation",
+      "version": "0.2.1"
+    },
+    {
+      "name": "studio-quality",
+      "source": "./studio-quality",
+      "description": "Quality assurance — plugin structure validation, MCP wiring",
+      "version": "0.2.1"
+    },
+    {
+      "name": "studio-docs",
+      "source": "./studio-docs",
+      "description": "Document delivery suite — blueprints, writing experts, parallel chapter generation, multi-format export (MD/DOCX/PDF)",
+      "version": "0.1.0"
+    },
+    {
+      "name": "studio-platform",
+      "source": "./studio-platform",
+      "description": "Platform documentation generator — brainmap, agent-plugin mapping, tech designs (DW/KG/ML/RAG), project plan, .pen visualization, speech scripts",
+      "version": "0.1.0"
+    },
+    {
+      "name": "studio-design",
+      "source": "./studio-design",
+      "description": "Design-to-code pipeline — screenshot → Pencil prototype → OpenSpec proposal → working code",
+      "version": "0.1.0"
+    },
+    {
+      "name": "studio-ontology",
+      "source": "./studio-ontology",
+      "description": "FDE pipeline — compile business analysis (DDD/event-storm) into a runnable clife-onto-engine ontology plugin (five-element schema: Object/Link/Function/Rule/Action)",
+      "version": "0.1.0"
+    },
+    {
+      "name": "studio-evolve",
+      "source": "./studio-evolve",
+      "description": "Self-evolving ontology pipeline — ground the IR in data evidence, derive simulated cases, attribute failed trajectories to five-element deficits as atomic proposals, and admit them only through a dual-gate sandbox scored on three growth axes (taller / sturdier / wider)",
+      "version": "0.1.0"
+    },
+    {
+      "name": "fund-review",
+      "source": "./fund-review",
+      "description": "Government IT procurement quote optimization + financial review pre-audit — parse budget standard and quotes, produce standards-cited optimization suggestions, rewrite spreadsheets per approved plan, score review reports",
+      "version": "0.8.0"
+    }
+  ]
+}
