@@ -309,9 +309,9 @@ Each expert team under `workbuddy/` is a repackaging, not a fork: it holds only 
 
 | Team | For | Bundles |
 |------|-----|---------|
-| `astra-studio-team` — Astra 产研工作室 | planning and building plugins | `studio-core`, `studio-insight`, `studio-planner`, `studio-quality` |
-| `docs-studio-team` — Astra 文书工作室 | bid documents, proposals, feasibility studies | `studio-docs`, `studio-insight`, parts of `studio-core` and `studio-planner` |
-| `paper-studio-team` — Astra 论文工作室 | empirical CS conference papers | `studio-paper`, `studio-docs` |
+| `astra-studio-team` — Astra 研发工作室 | planning and building plugins | `studio-core`, `studio-insight`, `studio-planner`, `studio-quality` |
+| `docs-studio-team` — Astra 方案工作室 | bid documents, proposals, feasibility studies | `studio-docs`, `studio-insight`, parts of `studio-core` and `studio-planner` |
+| `paper-studio-team` — Astra 研究工作室 | empirical CS conference papers | `studio-paper`, `studio-docs` |
 
 Avatars are drawn by `scripts/gen_team_avatars.py` (needs Pillow); add a cast there when adding a team.
 

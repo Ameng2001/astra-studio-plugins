@@ -16,12 +16,12 @@
   ],
   "expertType": "team",
   "displayName": {
-    "en": "Astra Paper",
-    "zh": "Astra 论文工作室"
+    "en": "Astra Studio",
+    "zh": "Astra 工作室"
   },
   "profession": {
-    "en": "Paper Studio · Empirical Research & Writing",
-    "zh": "论文工作室 · 实证研究与写作"
+    "en": "Research Studio",
+    "zh": "研究工作室"
   },
   "displayDescription": {
     "en": "Seven roles take an empirical CS paper from positioning and frozen criteria through an experiment ledger, evidence-only writing, simulated peer review, submission checks and rebuttal",
