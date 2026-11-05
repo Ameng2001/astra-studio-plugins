@@ -89,8 +89,8 @@ def check_hooks(root: Path, manifest: dict) -> dict:
     results = {"passed": [], "failed": [], "warnings": []}
 
     hooks_path_str = manifest.get("hooks")
-    if not hooks_path_str:
-        return results
+    if not isinstance(hooks_path_str, str):
+        return results  # absent, or an inline config / list — no single file to check
 
     hooks_path = root / hooks_path_str
     if not hooks_path.exists():
@@ -125,7 +125,15 @@ def check_plugin_dependencies(root: Path, manifest: dict) -> dict:
         results["passed"].append("No plugin dependencies declared")
         return results
 
+    if isinstance(deps, dict):
+        # WorkBuddy expert packages declare {"mcpServers": ..., "connectors": [...]}
+        # here instead of plugin names — not sibling plugins, nothing to look up.
+        results["passed"].append("Dependencies declare MCP servers / connectors, not plugins")
+        return results
+
     for dep in deps:
+        if isinstance(dep, dict):  # {"name": ..., "version": ..., "marketplace": ...}
+            dep = dep.get("name", "")
         # Check if the dependency exists as a sibling directory (in a collection)
         sibling = root.parent / dep
         if sibling.is_dir() and find_manifest(sibling).exists():

@@ -99,6 +99,7 @@ def validate_plugin(plugin_dir: str) -> dict:
     path_fields = {
         "skills": "skills directory",
         "commands": "commands directory",
+        "agents": "agents path",
         "hooks": "hooks file",
         "mcpServers": "MCP config file",
     }
@@ -106,14 +107,18 @@ def validate_plugin(plugin_dir: str) -> dict:
     for field, label in path_fields.items():
         if field not in manifest:
             continue
-        declared = manifest[field]
-        resolved = root / declared
-        if resolved.exists():
-            results["passed"].append(f"Declared {label} '{declared}' exists")
-        else:
-            results["failed"].append(
-                f"Declared {label} '{declared}' not found at {resolved}"
-            )
+        # A path, a list of paths, or (hooks / mcpServers) an inline config object.
+        value = manifest[field]
+        for declared in value if isinstance(value, list) else [value]:
+            if not isinstance(declared, str):
+                continue  # inline config — nothing on disk to resolve
+            resolved = root / declared
+            if resolved.exists():
+                results["passed"].append(f"Declared {label} '{declared}' exists")
+            else:
+                results["failed"].append(
+                    f"Declared {label} '{declared}' not found at {resolved}"
+                )
 
     return results
 

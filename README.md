@@ -300,7 +300,12 @@ claude --plugin-dir ./studio-core --plugin-dir ./studio-insight --plugin-dir ./s
 # After editing .claude-plugin/marketplace.json or any plugin version,
 # regenerate the CodeBuddy / WorkBuddy marketplace mirror (--check for CI)
 python3 scripts/sync_codebuddy_marketplace.py
+
+# Build the WorkBuddy open-platform expert-team package (zip under dist/workbuddy/)
+python3 scripts/build_workbuddy_team.py
 ```
+
+The expert team (`workbuddy/astra-studio-team/`) is a repackaging, not a fork: it holds only the team manifest, the lead and team-only agents, and avatars. Skills, references, templates and scripts are copied from `studio-core`, `studio-insight`, `studio-planner` and `studio-quality` at build time.
 
 `.claude-plugin/` is the single source of truth. CodeBuddy and WorkBuddy read each plugin's `.claude-plugin/plugin.json` directly; only the marketplace manifest is mirrored to `.codebuddy-plugin/marketplace.json`. CodeBuddy caches plugins by version, so bump `version` in `plugin.json` on every release or existing users will not see the change.
 

@@ -1,0 +1,55 @@
+{
+  "_doc": "Build inputs for scripts/build_workbuddy_team.py. `plugins` are bundled whole (skills + root-level support dirs). `members` lists the team in display order; a member with `source` reuses an existing agent body and only gets WorkBuddy frontmatter, one without it is authored in ./agents/.",
+  "plugins": ["studio-core", "studio-insight", "studio-planner", "studio-quality"],
+  "personas_from": "studio-insight/agents",
+  "members": [
+    {
+      "id": "astra-studio-team-lead",
+      "role": "lead",
+      "name": { "en": "Astra", "zh": "Astra" },
+      "profession": { "en": "Studio Lead & Orchestrator", "zh": "工坊主理人" }
+    },
+    {
+      "id": "product-manager",
+      "role": "member",
+      "source": "studio-insight/agents/product-manager.md",
+      "name": { "en": "Paige", "zh": "Paige" },
+      "profession": { "en": "Product Manager", "zh": "产品经理" },
+      "skills": ["persona-insight", "opportunity-brief"]
+    },
+    {
+      "id": "architect",
+      "role": "member",
+      "source": "studio-insight/agents/architect.md",
+      "name": { "en": "Archer", "zh": "Archer" },
+      "profession": { "en": "Software Architect", "zh": "架构师" },
+      "skills": ["domain-canvas", "behavior-matrix"]
+    },
+    {
+      "id": "ux-researcher",
+      "role": "member",
+      "source": "studio-insight/agents/ux-researcher.md",
+      "name": { "en": "Uma", "zh": "Uma" },
+      "profession": { "en": "UX Researcher", "zh": "用户研究员" },
+      "skills": ["journey-map", "process-flow"]
+    },
+    {
+      "id": "domain-expert",
+      "role": "member",
+      "name": { "en": "Dana", "zh": "Dana" },
+      "profession": { "en": "Domain Expert", "zh": "领域专家" }
+    },
+    {
+      "id": "skill-builder",
+      "role": "member",
+      "name": { "en": "Skye", "zh": "Skye" },
+      "profession": { "en": "Skill Engineer", "zh": "技能工程师" }
+    },
+    {
+      "id": "quality-reviewer",
+      "role": "member",
+      "name": { "en": "Quinn", "zh": "Quinn" },
+      "profession": { "en": "Quality Reviewer", "zh": "质检员" }
+    }
+  ]
+}

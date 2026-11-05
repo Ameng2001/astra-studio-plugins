@@ -1,0 +1,35 @@
+{
+  "name": "astra-studio-team",
+  "version": "0.1.0",
+  "description": "A seven-role studio team that turns a business idea into a shippable plugin: event storming, domain modeling, skill design, spec generation, first-draft skills and validation",
+  "author": {
+    "name": "VanLengs",
+    "email": "TODO@example.com"
+  },
+  "homepage": "https://github.com/Ameng2001/astra-studio-plugins",
+  "license": "Apache-2.0",
+  "keywords": ["plugin-development", "skill-design", "domain-modeling", "event-storming"],
+  "expertType": "team",
+  "displayName": { "en": "Astra Studio", "zh": "Astra 插件工坊" },
+  "profession": { "en": "Plugin & Skill Development Studio", "zh": "插件与技能研发团队" },
+  "displayDescription": {
+    "en": "Seven roles work through five stages — brainstorming, domain modeling, skill design, spec generation and first drafts — to turn a business idea into a plugin that is ready to validate and ship",
+    "zh": "七位专家分五阶段协作，从头脑风暴、领域建模到技能设计与初稿生成，把业务想法落成可校验、可上架的插件"
+  },
+  "avatar": "avatars/team.png",
+  "categoryId": "02-Engineering",
+  "defaultInitPrompt": {
+    "zh": "帮我从零规划一个插件：XX业务",
+    "en": "Help me plan a plugin for my business domain"
+  },
+  "tags": [
+    { "en": "Plugin Development", "zh": "插件开发" },
+    { "en": "Domain Modeling", "zh": "领域建模" },
+    { "en": "Skill Design", "zh": "技能设计" }
+  ],
+  "quickPrompts": [
+    { "en": "Help me plan a plugin for my business domain", "zh": "帮我从零规划一个插件：XX业务" },
+    { "en": "Create personas and a journey map for my scenario", "zh": "给XX场景做用户画像和旅程图" },
+    { "en": "Validate my plugin directory and suggest fixes", "zh": "校验我的插件目录并给出修复建议" }
+  ]
+}
