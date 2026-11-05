@@ -1,6 +1,6 @@
 {
   "name": "studio-quality",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Plugin quality assurance — validate plugin structure against Claude Code spec, check skill completeness, wire MCP servers. Use on any plugin directory to verify it is ready to ship.",
   "author": {
     "name": "VanLengs",

@@ -1,6 +1,6 @@
 {
   "name": "astra-studio",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "owner": {
     "name": "VanLengs",
     "url": "https://github.com/VanLengs"
@@ -22,13 +22,13 @@
       "name": "studio-planner",
       "source": "./studio-planner",
       "description": "Plugin planning pipeline — event storming, domain modeling, skill design, spec generation",
-      "version": "0.2.1"
+      "version": "0.2.2"
     },
     {
       "name": "studio-quality",
       "source": "./studio-quality",
       "description": "Quality assurance — plugin structure validation, MCP wiring",
-      "version": "0.2.1"
+      "version": "0.2.2"
     },
     {
       "name": "studio-docs",
