@@ -1,6 +1,6 @@
 {
   "name": "astra-studio-team",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A seven-role studio team that turns a business idea into a shippable plugin: event storming, domain modeling, skill design, spec generation, first-draft skills and validation",
   "author": {
     "name": "刘亚猛",
@@ -20,8 +20,8 @@
     "zh": "Astra 插件工坊"
   },
   "profession": {
-    "en": "Plugin & Skill Development Studio",
-    "zh": "插件与技能研发团队"
+    "en": "User Research, Product Modeling & Skill Development Team",
+    "zh": "用户研究、产品建模与技能开发团队"
   },
   "displayDescription": {
     "en": "Seven roles work through five stages — brainstorming, domain modeling, skill design, spec generation and first drafts — to turn a business idea into a plugin that is ready to validate and ship",
@@ -35,16 +35,16 @@
   },
   "tags": [
     {
-      "en": "Plugin Development",
-      "zh": "插件开发"
+      "en": "User Research",
+      "zh": "用户研究"
     },
     {
       "en": "Domain Modeling",
       "zh": "领域建模"
     },
     {
-      "en": "Skill Design",
-      "zh": "技能设计"
+      "en": "Skill Development",
+      "zh": "技能开发"
     }
   ],
   "quickPrompts": [
