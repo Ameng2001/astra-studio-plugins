@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "description": "A seven-role studio team that turns a business idea into a shippable plugin: event storming, domain modeling, skill design, spec generation, first-draft skills and validation",
   "author": {
-    "name": "VanLengs",
-    "email": "TODO@example.com"
+    "name": "刘亚猛",
+    "email": "ameng2001.liu@gmail.com"
   },
   "homepage": "https://github.com/Ameng2001/astra-studio-plugins",
   "license": "Apache-2.0",
