@@ -4,7 +4,7 @@ All avatars are original, drawn procedurally by `scripts/gen_team_avatars.py` (f
 
 | File | Character | Role |
 |------|-----------|------|
-| astra-studio-team-lead.png | Border collie | 工坊主理人 |
+| astra-studio-team-lead.png | Border collie | 工作室主理人 |
 | product-manager.png | Hamster | 产品经理 |
 | architect.png | Schnauzer | 架构师 |
 | ux-researcher.png | Siamese cat | 用户研究员 |
